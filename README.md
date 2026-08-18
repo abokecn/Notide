@@ -1,5 +1,7 @@
 # Notide
 
+English | [中文](docs/DEADME_ZH.md)
+
 Notide is a lightweight Vue 3 Markdown notebook inspired by Inkstone's calm, paper-like workspace. The browser UI and native Windows/Android shells share one codebase, with offline-first editing and optional Cloudflare R2 sync.
 
 ## Run locally
