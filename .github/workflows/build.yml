@@ -48,7 +48,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -61,6 +61,9 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npx tauri android init
+      - name: Install Notide Android icons
+        shell: bash
+        run: cp -R src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
       - name: Build Android debug APK
         shell: bash
         env:
@@ -68,7 +71,7 @@ jobs:
           CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
-          npm run native:android 2>&1 | tee android-build.log
+          npm run native:android -- --target aarch64 2>&1 | tee android-build.log
       - name: Publish Android failure details
         if: failure()
         shell: bash
@@ -86,13 +89,21 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ -f android-build.log ]]; then
             annotation="$(tail -n 45 android-build.log | tail -c 3500)"
+            filtered="$(grep -Ei 'FAILURE:|What went wrong|Execution failed|Caused by:|error:|A problem occurred|Could not|failed to|not found|No such file|Exception' android-build.log | tail -n 80 | tail -c 3500 || true)"
           else
             annotation="$details"
+            filtered=""
           fi
           annotation="${annotation//'%'/'%25'}"
           annotation="${annotation//$'\r'/'%0D'}"
           annotation="${annotation//$'\n'/'%0A'}"
           echo "::error title=Android build failure::$annotation"
+          if [[ -n "$filtered" ]]; then
+            filtered="${filtered//'%'/'%25'}"
+            filtered="${filtered//$'\r'/'%0D'}"
+            filtered="${filtered//$'\n'/'%0A'}"
+            echo "::error title=Android matched errors::$filtered"
+          fi
       - name: Upload Android debug APK
         uses: actions/upload-artifact@v4
         with:

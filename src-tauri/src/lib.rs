@@ -1,12 +1,13 @@
+#[cfg(all(debug_assertions, desktop))]
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(|_app| {
             #[cfg(all(debug_assertions, desktop))]
             {
-                let window = app.get_webview_window("main").expect("main window missing");
+                let window = _app.get_webview_window("main").expect("main window missing");
                 window.open_devtools();
             }
             Ok(())

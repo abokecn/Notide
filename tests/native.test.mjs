@@ -4,6 +4,10 @@ import fs from 'node:fs'
 
 const root = new URL('..', import.meta.url)
 const read = (path) => fs.readFileSync(new URL(path, root), 'utf8')
+const pngSize = (path) => {
+  const bytes = fs.readFileSync(new URL(path, root))
+  return [bytes.readUInt32BE(16), bytes.readUInt32BE(20)]
+}
 
 test('native clients are configured for Tauri desktop and Android builds', () => {
   const config = JSON.parse(read('src-tauri/tauri.conf.json'))
@@ -22,13 +26,15 @@ test('native clients are configured for Tauri desktop and Android builds', () =>
   assert.equal(packageJson.scripts['native:android'], 'tauri android build --ci --debug --apk')
   assert.equal(packageJson.scripts['native:android:release'], 'tauri android build --ci --apk --aab')
   assert.match(workflow, /npx tauri android init/)
-  assert.match(workflow, /npm run native:android/)
+  assert.match(workflow, /npm run native:android -- --target aarch64/)
+  assert.match(workflow, /cp -R src-tauri\/icons\/android\/\. src-tauri\/gen\/android\/app\/src\/main\/res\//)
   assert.match(workflow, /platforms;android-36/)
   assert.match(workflow, /build-tools;36\.0\.0/)
   assert.match(workflow, /NDK_HOME=.*29\.0\.13846066/)
   assert.match(workflow, /ANDROID_NDK_HOME=.*29\.0\.13846066/)
   assert.match(workflow, /android-build\.log/)
   assert.match(workflow, /::error title=Android build failure::/)
+  assert.match(workflow, /::error title=Android matched errors::/)
   assert.match(workflow, /tail -c 3500/)
   assert.match(workflow, /actions\/upload-artifact@v4/)
   assert.match(workflow, /notide-windows/)
@@ -36,6 +42,8 @@ test('native clients are configured for Tauri desktop and Android builds', () =>
   assert.match(workflow, /if-no-files-found: error/g)
   assert.match(workflow, /outputs\/apk\/\*\*\/\*\.apk/)
   assert.ok(fs.existsSync(new URL('src-tauri/icons/android/mipmap-mdpi/ic_launcher.png', root)))
+  assert.deepEqual(pngSize('src-tauri/icons/android/mipmap-hdpi/ic_launcher.png'), [72, 72])
+  assert.deepEqual(pngSize('src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png'), [72, 72])
   assert.ok(fs.existsSync(new URL('src-tauri/icons/icon.ico', root)))
   const icon = read('public/notide-icon.svg')
   assert.match(icon, /rx="228"/)
