@@ -84,10 +84,15 @@ jobs:
             printf '%s\n' "$details"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          details="${details//'%'/'%25'}"
-          details="${details//$'\r'/'%0D'}"
-          details="${details//$'\n'/'%0A'}"
-          echo "::error title=Android build failure::$details"
+          if [[ -f android-build.log ]]; then
+            annotation="$(tail -n 45 android-build.log | tail -c 3500)"
+          else
+            annotation="$details"
+          fi
+          annotation="${annotation//'%'/'%25'}"
+          annotation="${annotation//$'\r'/'%0D'}"
+          annotation="${annotation//$'\n'/'%0A'}"
+          echo "::error title=Android build failure::$annotation"
       - name: Upload Android debug APK
         uses: actions/upload-artifact@v4
         with:
