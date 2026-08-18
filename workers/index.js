@@ -52,8 +52,24 @@ export default {
     if (!isAuthorized(request, env)) return json({ error: 'unauthorized' }, 401)
 
     const url = new URL(request.url)
+    const health = url.pathname === '/api/health'
     const collection = url.pathname === '/api/notes'
     const match = url.pathname.match(/^\/api\/notes\/([^/]+)$/)
+
+    if (health) {
+      if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405)
+      try {
+        await env.NOTES_BUCKET.list({ prefix: NOTE_PREFIX, limit: 1 })
+        return json(
+          { ok: true, service: 'notide-sync', version: 1, storage: 'ready' },
+          200,
+          { 'cache-control': 'no-store' },
+        )
+      } catch {
+        return json({ error: 'storage_unavailable' }, 503, { 'cache-control': 'no-store' })
+      }
+    }
+
     if (!collection && !match) return json({ ok: true, service: 'notide-sync', version: 1 })
 
     if (collection && request.method === 'GET') {

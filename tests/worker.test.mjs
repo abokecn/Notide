@@ -47,3 +47,33 @@ test('worker rejects stale revisions', async () => {
   const stale = await worker.fetch(request('/api/notes/a', { method: 'PUT', headers: { 'content-type': 'application/json', 'if-match': '"0"' }, body: JSON.stringify({ content: 'v2', updatedAt: 20 }) }), testEnv)
   assert.equal(stale.status, 409)
 })
+
+test('worker health check is authenticated and verifies the R2 binding', async () => {
+  const healthy = await worker.fetch(request('/api/health'), env())
+  assert.equal(healthy.status, 200)
+  assert.deepEqual(await healthy.json(), {
+    ok: true,
+    service: 'notide-sync',
+    version: 1,
+    storage: 'ready',
+  })
+  assert.equal(healthy.headers.get('cache-control'), 'no-store')
+  assert.equal(healthy.headers.get('access-control-allow-origin'), '*')
+
+  const unauthorized = await worker.fetch(new Request('https://sync.example/api/health'), env())
+  assert.equal(unauthorized.status, 401)
+
+  const unavailable = await worker.fetch(request('/api/health'), {
+    SYNC_TOKEN: 'test-token',
+    NOTES_BUCKET: { list: async () => { throw new Error('binding unavailable') } },
+  })
+  assert.equal(unavailable.status, 503)
+  assert.deepEqual(await unavailable.json(), { error: 'storage_unavailable' })
+
+  const wrongMethod = await worker.fetch(request('/api/health', { method: 'POST' }), env())
+  assert.equal(wrongMethod.status, 405)
+
+  const preflight = await worker.fetch(new Request('https://sync.example/api/health', { method: 'OPTIONS' }), env())
+  assert.equal(preflight.status, 200)
+  assert.match(preflight.headers.get('access-control-allow-headers'), /authorization/)
+})

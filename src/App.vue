@@ -1,8 +1,9 @@
 <script setup>
 import { computed, defineAsyncComponent, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { syncWorkspace } from './sync.js'
+import { syncWorkspace, testSyncConnection } from './sync.js'
 
 const MarkdownPreview = defineAsyncComponent(() => import('./MarkdownPreview.vue'))
+const MarkdownEditor = defineAsyncComponent(() => import('./MarkdownEditor.vue'))
 
 const iconPaths = {
   notebook: ['M5 4.5h12a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z', 'M7 4.5v15', 'M9.5 8h6', 'M9.5 12h6', 'M9.5 16h4'],
@@ -36,6 +37,7 @@ const iconPaths = {
   table: ['M4 5h16v14H4z', 'M4 10h16', 'M4 15h16', 'M10 5v14', 'M16 5v14'],
   math: ['M5 6h14', 'M7 18l5-12 5 12', 'M9 14h6'],
   undo: ['M9 7L4 12l5 5', 'M4 12h9a7 7 0 0 1 7 7'],
+  redo: ['M15 7l5 5-5 5', 'M20 12h-9a7 7 0 0 0-7 7'],
   more: ['M5 12h.01', 'M12 12h.01', 'M19 12h.01'],
   sun: ['M12 4V2', 'M12 22v-2', 'M4.93 4.93L3.5 3.5', 'M20.5 20.5l-1.43-1.43', 'M4 12H2', 'M22 12h-2', 'M4.93 19.07L3.5 20.5', 'M20.5 3.5l-1.43 1.43', 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z'],
   moon: ['M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5z'],
@@ -53,9 +55,13 @@ const AppIcon = defineComponent({
 const STORAGE_KEY = 'notide-notes-v01'
 const SETTINGS_KEY = 'notide-settings-v01'
 const TOMBSTONE_KEY = 'notide-tombstones-v01'
+const UI_STATE_KEY = 'notide-ui-state-v01'
+const TOKEN_KEY = 'notide-sync-token-v01'
+const SESSION_TOKEN_KEY = 'notide-sync-token-session-v01'
 const LEGACY_STORAGE_KEY = 'sail-markdown-notes-v01'
 const LEGACY_SETTINGS_KEY = 'sail-markdown-settings-v01'
 const LEGACY_TOMBSTONE_KEY = 'sail-markdown-tombstones-v01'
+const shortcutModifier = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform) ? '⌘' : 'Ctrl'
 
 function migrateStorage() {
   if (typeof localStorage === 'undefined') return
@@ -97,7 +103,11 @@ const copy = {
     insertImage: '图片',
     insertTable: '表格',
     insertMath: '公式',
+    insertCallout: 'Callout',
+    insertTabs: '标签页',
+    moreTools: '更多格式',
     undo: '撤销',
+    redo: '重做',
     search: '搜索笔记',
     newNote: '新建笔记',
     untitled: '未命名笔记',
@@ -124,6 +134,14 @@ const copy = {
     dark: '深色',
     syncEndpoint: '同步端点',
     endpointHint: '可选。填写 Cloudflare Worker 地址后启用跨端同步。',
+    syncToken: '同步令牌',
+    rememberToken: '记住此设备',
+    testConnection: '测试连接',
+    connectionTesting: '正在测试连接',
+    connectionReady: '连接正常，R2 可用',
+    connectionLegacy: '连接正常，建议更新 Worker',
+    saveAndSync: '保存并同步',
+    disconnect: '留空即可关闭云同步。',
     close: '关闭',
     language: '语言',
     noNotes: '还没有笔记',
@@ -166,7 +184,11 @@ const copy = {
     insertImage: 'Image',
     insertTable: 'Table',
     insertMath: 'Formula',
+    insertCallout: 'Callout',
+    insertTabs: 'Tabs',
+    moreTools: 'More formatting',
     undo: 'Undo',
+    redo: 'Redo',
     search: 'Search notes',
     newNote: 'New note',
     untitled: 'Untitled note',
@@ -193,6 +215,14 @@ const copy = {
     dark: 'Dark',
     syncEndpoint: 'Sync endpoint',
     endpointHint: 'Optional. Add a Cloudflare Worker URL to enable multi-device sync.',
+    syncToken: 'Sync token',
+    rememberToken: 'Remember on this device',
+    testConnection: 'Test connection',
+    connectionTesting: 'Testing connection',
+    connectionReady: 'Connection ready, R2 available',
+    connectionLegacy: 'Connection ready; update the Worker when convenient',
+    saveAndSync: 'Save and sync',
+    disconnect: 'Leave the endpoint empty to disable cloud sync.',
     close: 'Close',
     language: 'Language',
     noNotes: 'No notes yet',
@@ -208,25 +238,50 @@ const copy = {
   },
 }
 
-const language = ref('zh')
-const theme = ref('dark')
-const viewMode = ref('split')
+const initialSettings = loadSettings()
+const initialUiState = loadUiState()
+const language = ref(initialSettings.language)
+const theme = ref(initialSettings.theme)
+const viewMode = ref(initialUiState.viewMode || 'split')
 const showSidebar = ref(true)
 const showSettings = ref(false)
 const searchQuery = ref('')
 const searchInput = ref(null)
 const activeSection = ref('all')
-const sortMode = ref('recent')
+const sortMode = ref(initialUiState.sortMode || 'recent')
 const showSortMenu = ref(false)
+const showMoreTools = ref(false)
 const syncState = ref('idle')
-const syncEndpoint = ref(import.meta.env.VITE_SYNC_ENDPOINT || '')
-const syncToken = ref(import.meta.env.VITE_SYNC_TOKEN || '')
+const syncEndpoint = ref(initialSettings.syncEndpoint)
+const syncDisabled = ref(initialSettings.syncDisabled)
+const syncToken = ref(loadSyncToken(initialSettings.syncToken))
+const rememberSyncToken = ref(initialSettings.rememberToken)
+const settingsDraft = ref(createSettingsDraft())
+const connectionState = ref('idle')
+const connectionMessage = ref('')
 const editor = ref(null)
 const tombstones = ref(loadTombstones())
 const showDeleteConfirm = ref(false)
-const contentHistory = ref([])
-const restoringHistory = ref(false)
+const isMobile = ref(typeof window !== 'undefined' && window.innerWidth <= 860)
+const isSavingSettings = ref(false)
+const settingsModal = ref(null)
+const settingsFirstControl = ref(null)
+const deleteModal = ref(null)
+const deleteCancelButton = ref(null)
+const mobileMenuButton = ref(null)
+const notesPanelCloseButton = ref(null)
+const sortTrigger = ref(null)
+const sortMenu = ref(null)
+const moreToolsTrigger = ref(null)
+const moreToolsMenu = ref(null)
+const editorCursor = ref({ line: 1, column: 1, from: 0, to: 0 })
+const editorHistory = ref({ canUndo: false, canRedo: false })
+const editorStates = ref(initialUiState.editorStates || {})
 let syncTimer = null
+let uiStateTimer = null
+let connectionController = null
+let settingsReturnFocus = null
+let deleteReturnFocus = null
 
 const seedNotes = [
   {
@@ -259,9 +314,19 @@ const seedNotes = [
 ]
 
 const notes = ref(loadNotes())
-const selectedId = ref(notes.value[0]?.id || 'welcome')
+const selectedId = ref(notes.value.some((note) => note.id === initialUiState.selectedId) ? initialUiState.selectedId : notes.value[0]?.id || 'welcome')
 const activeNote = computed(() => notes.value.find((note) => note.id === selectedId.value) || notes.value[0])
 const t = computed(() => copy[language.value])
+const activeEditorState = computed(() => editorStates.value[selectedId.value] || null)
+const modalOpen = computed(() => showSettings.value || showDeleteConfirm.value)
+const drawerOpen = computed(() => isMobile.value && showSidebar.value && !modalOpen.value)
+const settingsBusy = computed(() => connectionState.value === 'testing' || isSavingSettings.value)
+const syncStatusText = computed(() => ({
+  syncing: t.value.syncing,
+  synced: t.value.synced,
+  error: t.value.syncError,
+  local: t.value.local,
+}[syncState.value] || t.value.saved))
 
 const visibleNotes = computed(() => {
   let source = [...notes.value]
@@ -309,30 +374,42 @@ const navSecondary = computed(() => [
 ])
 
 const lineCount = computed(() => (activeNote.value?.content || '').split('\n').length)
-const wordCount = computed(() => (activeNote.value?.content || '').trim().split(/\s+/).filter(Boolean).length)
+const wordCount = computed(() => {
+  const source = activeNote.value?.content || ''
+  const cjk = source.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu)?.length || 0
+  const words = source.replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ' ').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length || 0
+  return cjk + words
+})
 
 watch([notes, tombstones], ([nextNotes, nextTombstones]) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(nextNotes))
   localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(nextTombstones))
   if (syncEndpoint.value && syncState.value !== 'syncing') scheduleSync()
 }, { deep: true })
-watch([language, theme, syncEndpoint, syncToken], ([nextLanguage, nextTheme, nextEndpoint, nextToken]) => {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ language: nextLanguage, theme: nextTheme, syncEndpoint: nextEndpoint, syncToken: nextToken }))
+watch([language, theme, syncEndpoint, syncDisabled, rememberSyncToken], ([nextLanguage, nextTheme, nextEndpoint, nextDisabled, nextRemember]) => {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ language: nextLanguage, theme: nextTheme, syncEndpoint: nextEndpoint, syncDisabled: nextDisabled, rememberToken: nextRemember }))
 })
+watch([selectedId, viewMode, sortMode, editorStates], scheduleUiStateSave, { deep: true })
 watch(language, (value) => {
   document.documentElement.lang = value === 'zh' ? 'zh-CN' : 'en'
 }, { immediate: true })
 onMounted(() => {
-  const settings = loadSettings()
-  language.value = settings.language
-  theme.value = settings.theme
-  syncEndpoint.value = settings.syncEndpoint
-  syncToken.value = settings.syncToken
-  if (window.innerWidth <= 680) showSidebar.value = false
+  updateViewport()
+  if (isMobile.value) {
+    showSidebar.value = false
+    viewMode.value = 'edit'
+  }
   if (syncEndpoint.value) window.setTimeout(syncNote, 350)
   window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('resize', updateViewport)
 })
-onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('resize', updateViewport)
+  window.clearTimeout(syncTimer)
+  window.clearTimeout(uiStateTimer)
+  connectionController?.abort()
+})
 
 function loadNotes() {
   try {
@@ -345,9 +422,211 @@ function loadNotes() {
 
 function loadSettings() {
   try {
-    return { language: 'zh', theme: 'dark', syncEndpoint: '', syncToken: '', ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }
+    const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')
+    const embeddedToken = String(stored.syncToken || '')
+    if (embeddedToken && !localStorage.getItem(TOKEN_KEY) && !sessionStorage.getItem(SESSION_TOKEN_KEY)) {
+      localStorage.setItem(TOKEN_KEY, embeddedToken)
+    }
+    const syncDisabled = stored.syncDisabled === true
+    const syncEndpoint = syncDisabled
+      ? ''
+      : String(stored.syncEndpoint || '').trim() || String(import.meta.env.VITE_SYNC_ENDPOINT || '').trim()
+    return {
+      language: stored.language === 'en' ? 'en' : 'zh',
+      theme: stored.theme === 'light' ? 'light' : 'dark',
+      syncEndpoint,
+      syncDisabled,
+      rememberToken: typeof stored.rememberToken === 'boolean' ? stored.rememberToken : isNativeClient() || Boolean(localStorage.getItem(TOKEN_KEY)),
+      syncToken: embeddedToken || String(import.meta.env.VITE_SYNC_TOKEN || ''),
+    }
   } catch {
-    return { language: 'zh', theme: 'dark', syncEndpoint: '', syncToken: '' }
+    return {
+      language: 'zh',
+      theme: 'dark',
+      syncEndpoint: String(import.meta.env.VITE_SYNC_ENDPOINT || '').trim(),
+      syncDisabled: false,
+      rememberToken: isNativeClient(),
+      syncToken: String(import.meta.env.VITE_SYNC_TOKEN || ''),
+    }
+  }
+}
+
+function loadUiState() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(UI_STATE_KEY) || '{}')
+    return {
+      selectedId: String(stored.selectedId || ''),
+      viewMode: ['edit', 'split', 'preview'].includes(stored.viewMode) ? stored.viewMode : 'split',
+      sortMode: stored.sortMode === 'title' ? 'title' : 'recent',
+      editorStates: stored.editorStates && typeof stored.editorStates === 'object' ? stored.editorStates : {},
+    }
+  } catch {
+    return { selectedId: '', viewMode: 'split', sortMode: 'recent', editorStates: {} }
+  }
+}
+
+function loadSyncToken(fallback = '') {
+  return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY) || fallback
+}
+
+function isNativeClient() {
+  return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
+}
+
+function persistSyncToken(value, remember) {
+  localStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(SESSION_TOKEN_KEY)
+  if (!value) return
+  if (remember) localStorage.setItem(TOKEN_KEY, value)
+  else sessionStorage.setItem(SESSION_TOKEN_KEY, value)
+}
+
+function scheduleUiStateSave() {
+  window.clearTimeout(uiStateTimer)
+  uiStateTimer = window.setTimeout(() => {
+    localStorage.setItem(UI_STATE_KEY, JSON.stringify({
+      selectedId: selectedId.value,
+      viewMode: viewMode.value,
+      sortMode: sortMode.value,
+      editorStates: editorStates.value,
+    }))
+  }, 180)
+}
+
+function createSettingsDraft() {
+  return {
+    language: language.value,
+    theme: theme.value,
+    syncEndpoint: syncEndpoint.value,
+    syncToken: syncToken.value,
+    rememberToken: rememberSyncToken.value,
+  }
+}
+
+function updateViewport() {
+  isMobile.value = window.innerWidth <= 860
+}
+
+function activeElementWithFocus() {
+  const element = document.activeElement
+  return element && typeof element.focus === 'function' ? element : null
+}
+
+function trapModalFocus(event, modal) {
+  if (!modal) return
+  const controls = [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => element.getClientRects().length > 0)
+  if (!controls.length) return
+  const first = controls[0]
+  const last = controls.at(-1)
+  if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function openSettings() {
+  settingsReturnFocus = activeElementWithFocus()
+  settingsDraft.value = createSettingsDraft()
+  connectionState.value = 'idle'
+  connectionMessage.value = ''
+  showSettings.value = true
+  nextTick(() => settingsFirstControl.value?.focus())
+}
+
+function closeSettings() {
+  if (!showSettings.value) return
+  connectionController?.abort()
+  connectionController = null
+  showSettings.value = false
+  const target = settingsReturnFocus
+  settingsReturnFocus = null
+  nextTick(() => target?.isConnected && target.focus())
+}
+
+function connectionErrorText(code) {
+  const messages = language.value === 'zh'
+    ? {
+        sync_endpoint_required: '请填写 Worker 地址。',
+        sync_endpoint_invalid: '地址格式无效，请填写 Worker 基础地址。',
+        sync_endpoint_protocol: '只支持 HTTP 或 HTTPS 地址。',
+        sync_endpoint_insecure: '公网同步必须使用 HTTPS。',
+        sync_auth_unauthorized: '令牌不正确，Worker 返回 401。',
+        sync_auth_forbidden: '当前令牌没有访问权限。',
+        sync_endpoint_not_found: '没有找到 Notide Worker API。',
+        sync_storage_unavailable: 'Worker 已连接，但 R2 绑定不可用。',
+        sync_service_mismatch: '该地址不是兼容的 Notide Worker。',
+        sync_response_invalid: 'Worker 返回了无法识别的响应。',
+        sync_connection_aborted: '连接测试超时。',
+        sync_network_or_cors: '无法连接，请检查网络、地址和 CORS。',
+        sync_service_unavailable: 'Worker 服务暂时不可用。',
+      }
+    : {
+        sync_endpoint_required: 'Enter the Worker URL.',
+        sync_endpoint_invalid: 'Enter a valid Worker base URL.',
+        sync_endpoint_protocol: 'Only HTTP and HTTPS URLs are supported.',
+        sync_endpoint_insecure: 'Remote sync must use HTTPS.',
+        sync_auth_unauthorized: 'The token is incorrect; the Worker returned 401.',
+        sync_auth_forbidden: 'This token does not have access.',
+        sync_endpoint_not_found: 'No compatible Notide Worker API was found.',
+        sync_storage_unavailable: 'The Worker responded, but its R2 binding is unavailable.',
+        sync_service_mismatch: 'This URL is not a compatible Notide Worker.',
+        sync_response_invalid: 'The Worker returned an invalid response.',
+        sync_connection_aborted: 'The connection test timed out.',
+        sync_network_or_cors: 'Could not connect; check the network, URL, and CORS.',
+        sync_service_unavailable: 'The Worker is temporarily unavailable.',
+      }
+  return messages[code] || (language.value === 'zh' ? '连接测试失败。' : 'Connection test failed.')
+}
+
+async function testDraftConnection() {
+  connectionController?.abort()
+  connectionController = new AbortController()
+  const timeout = window.setTimeout(() => connectionController?.abort(), 8000)
+  connectionState.value = 'testing'
+  connectionMessage.value = t.value.connectionTesting
+  try {
+    const result = await testSyncConnection({
+      endpoint: settingsDraft.value.syncEndpoint,
+      token: settingsDraft.value.syncToken,
+      signal: connectionController.signal,
+    })
+    settingsDraft.value.syncEndpoint = result.endpoint
+    connectionState.value = 'ready'
+    connectionMessage.value = result.legacy ? t.value.connectionLegacy : t.value.connectionReady
+    return result
+  } catch (error) {
+    connectionState.value = 'error'
+    connectionMessage.value = connectionErrorText(error?.code)
+    return null
+  } finally {
+    window.clearTimeout(timeout)
+    connectionController = null
+  }
+}
+
+async function saveSettingsAndSync() {
+  if (settingsBusy.value) return
+  isSavingSettings.value = true
+  try {
+    if (settingsDraft.value.syncEndpoint.trim() && !await testDraftConnection()) return
+    const endpoint = settingsDraft.value.syncEndpoint.trim()
+
+    language.value = settingsDraft.value.language
+    theme.value = settingsDraft.value.theme
+    syncEndpoint.value = endpoint
+    syncDisabled.value = !endpoint
+    syncToken.value = settingsDraft.value.syncToken
+    rememberSyncToken.value = settingsDraft.value.rememberToken
+    persistSyncToken(syncToken.value, rememberSyncToken.value)
+    closeSettings()
+    if (syncEndpoint.value) await syncNote()
+    else syncState.value = 'idle'
+  } finally {
+    isSavingSettings.value = false
   }
 }
 
@@ -362,8 +641,18 @@ function loadTombstones() {
 
 function selectNote(id) {
   selectedId.value = id
-  if (window.innerWidth <= 680) showSidebar.value = false
+  if (isMobile.value) showSidebar.value = false
   nextTick(() => editor.value?.focus())
+}
+
+function openSidebar() {
+  showSidebar.value = true
+  if (isMobile.value) nextTick(() => notesPanelCloseButton.value?.focus())
+}
+
+function closeSidebar({ restoreFocus = false } = {}) {
+  showSidebar.value = false
+  if (restoreFocus && isMobile.value) nextTick(() => mobileMenuButton.value?.focus())
 }
 
 function setSection(section) {
@@ -389,7 +678,7 @@ function createNote() {
     favorite: false,
     pinned: false,
     updatedAt: Date.now(),
-    content: `# ${t.value.untitled}\n\n`,
+    content: '',
   })
   selectedId.value = id
   viewMode.value = 'edit'
@@ -398,15 +687,24 @@ function createNote() {
 
 function updateNote(field, value) {
   if (!activeNote.value) return
-  if (field === 'content' && !restoringHistory.value && value !== activeNote.value.content) {
-    contentHistory.value = [...contentHistory.value.slice(-29), { id: activeNote.value.id, content: activeNote.value.content }]
-  }
+  if (activeNote.value[field] === value) return
   activeNote.value[field] = value
   activeNote.value.updatedAt = Date.now()
 }
 
 function requestDelete() {
-  if (activeNote.value && notes.value.length > 1) showDeleteConfirm.value = true
+  if (!activeNote.value || notes.value.length <= 1) return
+  deleteReturnFocus = activeElementWithFocus()
+  showDeleteConfirm.value = true
+  nextTick(() => deleteCancelButton.value?.focus())
+}
+
+function closeDeleteConfirm() {
+  if (!showDeleteConfirm.value) return
+  showDeleteConfirm.value = false
+  const target = deleteReturnFocus
+  deleteReturnFocus = null
+  nextTick(() => target?.isConnected && target.focus())
 }
 
 function deleteNote() {
@@ -416,6 +714,8 @@ function deleteNote() {
   notes.value.splice(index, 1)
   selectedId.value = notes.value[Math.max(0, index - 1)]?.id || notes.value[0].id
   showDeleteConfirm.value = false
+  deleteReturnFocus = null
+  nextTick(() => editor.value?.focus())
 }
 
 function toggleFavorite() {
@@ -427,21 +727,29 @@ function togglePinned() {
 }
 
 function undoContent() {
-  if (!activeNote.value) return
-  const index = [...contentHistory.value].reverse().findIndex((entry) => entry.id === activeNote.value.id)
-  if (index < 0) return
-  const actualIndex = contentHistory.value.length - 1 - index
-  const entry = contentHistory.value[actualIndex]
-  contentHistory.value.splice(actualIndex, 1)
-  restoringHistory.value = true
-  activeNote.value.content = entry.content
-  activeNote.value.updatedAt = Date.now()
-  nextTick(() => { restoringHistory.value = false; editor.value?.focus() })
+  editor.value?.undo()
+}
+
+function redoContent() {
+  editor.value?.redo()
 }
 
 function chooseSort(mode) {
   sortMode.value = mode
   showSortMenu.value = false
+  nextTick(() => sortTrigger.value?.focus())
+}
+
+function toggleSortMenu() {
+  showSortMenu.value = !showSortMenu.value
+  showMoreTools.value = false
+  if (showSortMenu.value) nextTick(() => sortMenu.value?.querySelector('button')?.focus())
+}
+
+function toggleMoreTools() {
+  showMoreTools.value = !showMoreTools.value
+  showSortMenu.value = false
+  if (showMoreTools.value) nextTick(() => moreToolsMenu.value?.querySelector('button')?.focus())
 }
 
 function handleKeydown(event) {
@@ -454,10 +762,17 @@ function handleKeydown(event) {
     event.preventDefault()
     createNote()
   } else if (event.key === 'Escape') {
-    showSettings.value = false
-    showDeleteConfirm.value = false
-    showSortMenu.value = false
-    if (window.innerWidth <= 680) showSidebar.value = false
+    if (showDeleteConfirm.value) return closeDeleteConfirm()
+    if (showSettings.value) return closeSettings()
+    if (showMoreTools.value) {
+      showMoreTools.value = false
+      return nextTick(() => moreToolsTrigger.value?.focus())
+    }
+    if (showSortMenu.value) {
+      showSortMenu.value = false
+      return nextTick(() => sortTrigger.value?.focus())
+    }
+    if (drawerOpen.value) closeSidebar({ restoreFocus: true })
   }
 }
 
@@ -467,43 +782,29 @@ function navigateWiki(rawTarget) {
   if (target) selectNote(target.id)
 }
 
-function insertMarkdown(prefix, suffix = prefix) {
-  const textarea = editor.value
-  if (!textarea || !activeNote.value) return
-  const start = textarea.selectionStart
-  const end = textarea.selectionEnd
-  const selected = activeNote.value.content.slice(start, end) || (language.value === 'zh' ? '文字' : 'text')
-  updateNote('content', `${activeNote.value.content.slice(0, start)}${prefix}${selected}${suffix}${activeNote.value.content.slice(end)}`)
-  nextTick(() => {
-    textarea.focus()
-    textarea.setSelectionRange(start + prefix.length, start + prefix.length + selected.length)
-  })
+function formatMarkdown(name) {
+  if (viewMode.value === 'preview') return
+  editor.value?.format(name)
+  showMoreTools.value = false
 }
 
-function insertLinePrefix(prefix) {
-  const textarea = editor.value
-  if (!textarea || !activeNote.value) return
-  const start = textarea.selectionStart
-  const end = textarea.selectionEnd
-  const content = activeNote.value.content
-  const lineStart = content.lastIndexOf('\n', Math.max(0, start - 1)) + 1
-  const lineEnd = content.indexOf('\n', end) === -1 ? content.length : content.indexOf('\n', end)
-  const selected = content.slice(lineStart, lineEnd)
-  const next = selected.split('\n').map((line) => `${prefix}${line}`).join('\n')
-  updateNote('content', `${content.slice(0, lineStart)}${next}${content.slice(lineEnd)}`)
-  nextTick(() => { textarea.focus(); textarea.setSelectionRange(lineStart, lineStart + next.length) })
+function handleCursorChange(value) {
+  editorCursor.value = value
 }
 
-function insertHeading() { insertLinePrefix('## ') }
-function insertBullet() { insertLinePrefix('- ') }
-function insertOrdered() { insertLinePrefix('1. ') }
-function insertTask() { insertLinePrefix('- [ ] ') }
-function insertQuote() { insertLinePrefix('> ') }
-function insertLink() { insertMarkdown('[', '](https://)') }
-function insertImage() { insertMarkdown('![', '](https://)') }
-function insertTable() { insertMarkdown('| Column | Column |\n| --- | --- |\n| ', ' | value |') }
-function insertMath() { insertMarkdown('$', '$') }
-function insertCodeBlock() { insertMarkdown('```\n', '\n```') }
+function handleHistoryChange(value) {
+  editorHistory.value = value
+}
+
+function handleEditorState(value) {
+  if (!value?.noteId) return
+  editorStates.value = { ...editorStates.value, [value.noteId]: value }
+  const ids = Object.keys(editorStates.value)
+  if (ids.length > 40) {
+    const activeIds = new Set(notes.value.slice(0, 40).map((note) => note.id))
+    editorStates.value = Object.fromEntries(Object.entries(editorStates.value).filter(([id]) => activeIds.has(id)))
+  }
+}
 
 function scheduleSync() {
   window.clearTimeout(syncTimer)
@@ -511,6 +812,7 @@ function scheduleSync() {
 }
 
 async function syncNote() {
+  if (syncState.value === 'syncing') return
   if (!activeNote.value && !notes.value.length) return
   if (!syncEndpoint.value.trim()) {
     syncState.value = 'local'
@@ -542,59 +844,59 @@ function formatTime(timestamp) {
 
 <template>
   <div class="app-shell" :class="{ 'navigation-hidden': !showSidebar }" :data-theme="theme">
-    <aside class="workspace-nav" :class="{ collapsed: !showSidebar }">
+    <aside class="workspace-nav" :class="{ collapsed: !showSidebar }" :inert="modalOpen">
       <div class="nav-brand">
-        <img src="/notide-icon.svg" alt="Notide" class="brand-icon" />
+        <img src="/notide-icon.svg" alt="" aria-hidden="true" class="brand-icon" />
         <span class="brand-name">Notide</span>
-        <button class="nav-collapse" :title="t.closeMenu" :aria-label="t.closeMenu" @click="showSidebar = false"><AppIcon name="close" :size="18" /></button>
+        <button type="button" class="nav-collapse" :title="t.closeMenu" :aria-label="t.closeMenu" @click="closeSidebar()"><AppIcon name="close" :size="18" /></button>
       </div>
 
       <nav class="nav-primary" :aria-label="t.notes">
-        <button v-for="item in navPrimary" :key="item.key" class="nav-item" :class="{ active: activeSection === item.key }" @click="setSection(item.key)">
+        <button v-for="item in navPrimary" :key="item.key" type="button" class="nav-item" :class="{ active: activeSection === item.key }" :aria-current="activeSection === item.key ? 'page' : undefined" @click="setSection(item.key)">
           <AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span><b v-if="item.count != null">{{ item.count }}</b>
         </button>
       </nav>
 
       <div class="nav-heading">{{ t.tags }}</div>
       <nav class="tag-list" :aria-label="t.tags">
-        <button v-for="([tag, count]) in tagCloud" :key="tag" class="tag-item" @click="filterTag(tag)"><AppIcon name="tag" :size="15" /><span>#{{ tag }}</span><b>{{ count }}</b></button>
+        <button v-for="([tag, count]) in tagCloud" :key="tag" type="button" class="tag-item" @click="filterTag(tag)"><AppIcon name="tag" :size="15" /><span>#{{ tag }}</span><b>{{ count }}</b></button>
         <span v-if="!tagCloud.length" class="nav-empty">#{{ language === 'zh' ? '开始记录' : 'start-writing' }}</span>
       </nav>
 
       <div class="nav-heading nav-heading-secondary">{{ language === 'zh' ? '系统' : 'Workspace' }}</div>
       <nav class="nav-secondary">
-        <button v-for="item in navSecondary" :key="item.key" class="nav-item" :class="{ active: activeSection === item.key }" @click="setSection(item.key)">
+        <button v-for="item in navSecondary" :key="item.key" type="button" class="nav-item" :class="{ active: activeSection === item.key }" :aria-current="activeSection === item.key ? 'page' : undefined" @click="setSection(item.key)">
           <AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span><b v-if="item.count">{{ item.count }}</b>
         </button>
       </nav>
 
       <div class="nav-footer">
-        <button class="profile-button" title="Notide workspace"><span class="profile-avatar">N</span><span><strong>Notide workspace</strong><small>{{ syncEndpoint ? t.online : t.local }}</small></span></button>
-        <button class="nav-settings" :title="t.settings" :aria-label="t.settings" @click="showSettings = true"><AppIcon name="settings" :size="18" /></button>
+        <button type="button" class="profile-button" :title="t.settings" @click="openSettings"><span class="profile-avatar">N</span><span><strong>Notide workspace</strong><small>{{ syncEndpoint ? t.online : t.local }}</small></span></button>
+        <button type="button" class="nav-settings" :title="t.settings" :aria-label="t.settings" @click="openSettings"><AppIcon name="settings" :size="18" /></button>
       </div>
     </aside>
 
-    <aside class="notes-panel" :class="{ collapsed: !showSidebar }">
+    <aside id="notes-panel" class="notes-panel" :class="{ collapsed: !showSidebar }" :inert="modalOpen" :role="drawerOpen ? 'dialog' : undefined" :aria-modal="drawerOpen ? 'true' : undefined" :aria-label="drawerOpen ? t.notes : undefined">
       <header class="notes-panel-header">
         <div><span class="eyebrow">NOTIDE / NOTEBOOK</span><h1>{{ sectionTitle }}</h1></div>
-        <div class="notes-panel-actions"><div class="sort-control"><button class="panel-icon-button" :title="t.sort" :aria-label="t.sort" :aria-expanded="showSortMenu" @click="showSortMenu = !showSortMenu"><AppIcon name="sort" :size="18" /></button><div v-if="showSortMenu" class="sort-menu" role="menu"><button type="button" :class="{ active: sortMode === 'recent' }" role="menuitem" @click="chooseSort('recent')">{{ t.sortRecent }}</button><button type="button" :class="{ active: sortMode === 'title' }" role="menuitem" @click="chooseSort('title')">{{ t.sortTitle }}</button></div></div><button class="panel-icon-button" :title="t.closeMenu" :aria-label="t.closeMenu" @click="showSidebar = false"><AppIcon name="close" :size="18" /></button></div>
+        <div class="notes-panel-actions"><div class="sort-control"><button ref="sortTrigger" type="button" class="panel-icon-button" :title="t.sort" :aria-label="t.sort" aria-haspopup="true" aria-controls="sort-menu" :aria-expanded="showSortMenu" @click="toggleSortMenu"><AppIcon name="sort" :size="18" /></button><div v-if="showSortMenu" id="sort-menu" ref="sortMenu" class="sort-menu" role="group" :aria-label="t.sort"><button type="button" :class="{ active: sortMode === 'recent' }" :aria-pressed="sortMode === 'recent'" @click="chooseSort('recent')">{{ t.sortRecent }}</button><button type="button" :class="{ active: sortMode === 'title' }" :aria-pressed="sortMode === 'title'" @click="chooseSort('title')">{{ t.sortTitle }}</button></div></div><button type="button" class="panel-icon-button" :title="t.settings" :aria-label="t.settings" @click="openSettings"><AppIcon name="settings" :size="18" /></button><button ref="notesPanelCloseButton" type="button" class="panel-icon-button" :title="t.closeMenu" :aria-label="t.closeMenu" @click="closeSidebar({ restoreFocus: true })"><AppIcon name="close" :size="18" /></button></div>
       </header>
-      <div class="notes-search"><AppIcon name="search" :size="17" /><input ref="searchInput" v-model="searchQuery" :placeholder="t.search" :aria-label="t.search" /><kbd>⌘ K</kbd></div>
-      <button class="new-note" @click="createNote"><AppIcon name="plus" :size="19" /><span>{{ t.newNote }}</span><kbd>⌘ N</kbd></button>
+      <div class="notes-search"><AppIcon name="search" :size="17" /><input ref="searchInput" v-model="searchQuery" :placeholder="t.search" :aria-label="t.search" /><kbd>{{ shortcutModifier }} K</kbd></div>
+      <button type="button" class="new-note" @click="createNote"><AppIcon name="plus" :size="19" /><span>{{ t.newNote }}</span><kbd>{{ shortcutModifier }} N</kbd></button>
 
       <div class="notes-list">
         <div class="list-summary"><span>{{ sectionTitle }}</span><span>{{ visibleNotes.length }}</span></div>
         <div v-if="visibleNotes.length" class="note-groups">
           <div v-if="pinnedNotes.length" class="note-group pinned-group">
             <div class="folder-label"><AppIcon name="pin" :size="13" /><span>{{ t.pinned }}</span></div>
-            <button v-for="note in pinnedNotes" :key="`pinned-${note.id}`" class="note-item" :class="{ selected: note.id === selectedId }" @click="selectNote(note.id)">
+            <button v-for="note in pinnedNotes" :key="`pinned-${note.id}`" type="button" class="note-item" :class="{ selected: note.id === selectedId }" :aria-current="note.id === selectedId ? 'page' : undefined" @click="selectNote(note.id)">
               <span class="note-mark pinned"><AppIcon name="pin" :size="14" /></span>
               <span class="note-copy"><strong>{{ note.title }}</strong><small>{{ previewText(note.content) }}</small><em>{{ formatTime(note.updatedAt) }}</em></span>
             </button>
           </div>
           <div v-for="(group, folder) in groupedNotes" :key="folder" class="note-group">
             <div class="folder-label"><AppIcon name="chevron" :size="13" /><span>{{ folder }}</span></div>
-            <button v-for="note in group" :key="note.id" class="note-item" :class="{ selected: note.id === selectedId }" @click="selectNote(note.id)">
+            <button v-for="note in group" :key="note.id" type="button" class="note-item" :class="{ selected: note.id === selectedId }" :aria-current="note.id === selectedId ? 'page' : undefined" @click="selectNote(note.id)">
               <span class="note-mark" :class="{ favorite: note.favorite }"><AppIcon :name="note.favorite ? 'star' : 'dot'" :size="note.favorite ? 14 : 12" /></span>
               <span class="note-copy"><strong>{{ note.title }}</strong><small>{{ previewText(note.content) }}</small><em>{{ formatTime(note.updatedAt) }}</em></span>
             </button>
@@ -604,51 +906,70 @@ function formatTime(timestamp) {
       </div>
     </aside>
 
-    <main class="workspace">
+    <div v-if="drawerOpen" class="drawer-scrim" aria-hidden="true" @click="closeSidebar({ restoreFocus: true })"></div>
+
+    <main class="workspace" :inert="modalOpen || drawerOpen">
       <header class="editor-topbar">
-        <div class="editor-context"><button class="mobile-menu" :title="t.openMenu" :aria-label="t.openMenu" @click="showSidebar = true"><AppIcon name="menu" :size="19" /></button><span>Notide</span><span>/</span></div>
-        <div class="title-capsule"><input class="document-title" :value="activeNote?.title" :placeholder="t.titlePlaceholder" :aria-label="t.titlePlaceholder" @input="updateNote('title', $event.target.value)" /><button class="favorite-button" :class="{ starred: activeNote?.favorite }" :title="t.toggleFavorite" :aria-label="t.toggleFavorite" @click="toggleFavorite"><AppIcon name="star" :size="20" /></button><button class="pin-button" :class="{ pinned: activeNote?.pinned }" :title="activeNote?.pinned ? t.unpin : t.pin" :aria-label="activeNote?.pinned ? t.unpin : t.pin" @click="togglePinned"><AppIcon name="pin" :size="18" /></button></div>
+        <div class="editor-context"><button ref="mobileMenuButton" type="button" class="mobile-menu" :title="t.openMenu" :aria-label="t.openMenu" aria-controls="notes-panel" :aria-expanded="drawerOpen" @click="openSidebar"><AppIcon name="menu" :size="19" /></button><span>Notide</span><span>/</span></div>
+        <div class="title-capsule"><input class="document-title" :value="activeNote?.title" :placeholder="t.titlePlaceholder" :aria-label="t.titlePlaceholder" @input="updateNote('title', $event.target.value)" /><button type="button" class="favorite-button" :class="{ starred: activeNote?.favorite }" :title="t.toggleFavorite" :aria-label="t.toggleFavorite" :aria-pressed="Boolean(activeNote?.favorite)" @click="toggleFavorite"><AppIcon name="star" :size="20" /></button><button type="button" class="pin-button" :class="{ pinned: activeNote?.pinned }" :title="activeNote?.pinned ? t.unpin : t.pin" :aria-label="activeNote?.pinned ? t.unpin : t.pin" :aria-pressed="Boolean(activeNote?.pinned)" @click="togglePinned"><AppIcon name="pin" :size="18" /></button></div>
         <div class="topbar-actions">
+          <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ syncStatusText }}</span>
           <span v-if="syncState === 'synced'" class="sync-message">✓ {{ t.synced }}</span><span v-else-if="syncState === 'syncing'" class="sync-message">◌ {{ t.syncing }}</span><span v-else-if="syncState === 'error'" class="sync-message error">× {{ t.syncError }}</span>
-          <button class="icon-button" :title="t.sync" :aria-label="t.sync" @click="syncNote"><AppIcon name="sync" :size="18" /></button>
-          <button class="icon-button danger-action" :class="{ disabled: notes.length <= 1 }" :title="t.delete" :aria-label="t.delete" :disabled="notes.length <= 1" @click="requestDelete"><AppIcon name="trash" :size="18" /></button>
-          <button class="icon-button" :title="t.focus" :aria-label="t.focus" @click="showSidebar = false"><AppIcon name="more" :size="19" /></button>
+          <button type="button" class="icon-button" :title="t.sync" :aria-label="t.sync" :aria-busy="syncState === 'syncing'" :disabled="syncState === 'syncing'" @click="syncNote"><AppIcon name="sync" :size="18" /></button>
+          <button type="button" class="icon-button danger-action" :class="{ disabled: notes.length <= 1 }" :title="t.delete" :aria-label="t.delete" :disabled="notes.length <= 1" @click="requestDelete"><AppIcon name="trash" :size="18" /></button>
+          <button type="button" class="icon-button" :title="t.focus" :aria-label="t.focus" :aria-pressed="!showSidebar" @click="showSidebar = !showSidebar"><AppIcon name="more" :size="19" /></button>
         </div>
       </header>
 
       <div class="document-meta"><span>{{ t.today }}</span><span>·</span><span>{{ formatTime(activeNote?.updatedAt || Date.now()) }}</span><span>·</span><span>Markdown</span></div>
 
       <div class="toolbar">
-        <div class="format-tools" role="toolbar" :aria-label="language === 'zh' ? 'Markdown 工具栏' : 'Markdown toolbar'">
-          <button class="toolbar-button" :title="t.insertHeading" :aria-label="t.insertHeading" @click="insertHeading"><AppIcon name="notebook" :size="17" /></button>
+        <div v-if="viewMode !== 'preview'" class="format-tools" role="toolbar" :aria-label="language === 'zh' ? 'Markdown 工具栏' : 'Markdown toolbar'">
+          <button type="button" class="toolbar-button" :title="t.insertHeading" :aria-label="t.insertHeading" @click="formatMarkdown('heading')"><AppIcon name="notebook" :size="17" /></button>
+          <button type="button" class="toolbar-button" :title="t.insertBold" :aria-label="t.insertBold" @click="formatMarkdown('bold')"><AppIcon name="bold" :size="17" /></button>
+          <button type="button" class="toolbar-button" :title="t.insertTask" :aria-label="t.insertTask" @click="formatMarkdown('task')"><AppIcon name="check" :size="17" /></button>
+          <button type="button" class="toolbar-button" :title="t.insertLink" :aria-label="t.insertLink" @click="formatMarkdown('link')"><AppIcon name="link" :size="17" /></button>
+          <button type="button" class="toolbar-button" :title="t.insertCode" :aria-label="t.insertCode" @click="formatMarkdown('inlineCode')"><AppIcon name="code" :size="17" /></button>
           <span class="tool-divider"></span>
-          <button class="toolbar-button" :title="t.insertBold" :aria-label="t.insertBold" @click="insertMarkdown('**')"><AppIcon name="bold" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertItalic" :aria-label="t.insertItalic" @click="insertMarkdown('*')"><AppIcon name="italic" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertStrike" :aria-label="t.insertStrike" @click="insertMarkdown('~~')"><AppIcon name="strike" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertCode" :aria-label="t.insertCode" @click="insertMarkdown('`')"><AppIcon name="code" :size="17" /></button>
-          <span class="tool-divider"></span>
-          <button class="toolbar-button" :title="t.insertBullet" :aria-label="t.insertBullet" @click="insertBullet"><AppIcon name="list" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertOrdered" :aria-label="t.insertOrdered" @click="insertOrdered"><AppIcon name="ordered" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertTask" :aria-label="t.insertTask" @click="insertTask"><AppIcon name="check" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertQuote" :aria-label="t.insertQuote" @click="insertQuote"><AppIcon name="quote" :size="17" /></button>
-          <span class="tool-divider"></span>
-          <button class="toolbar-button" :title="t.insertLink" :aria-label="t.insertLink" @click="insertLink"><AppIcon name="link" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertImage" :aria-label="t.insertImage" @click="insertImage"><AppIcon name="image" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertTable" :aria-label="t.insertTable" @click="insertTable"><AppIcon name="table" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertMath" :aria-label="t.insertMath" @click="insertMath"><AppIcon name="math" :size="17" /></button>
-          <button class="toolbar-button" :title="t.insertCode" :aria-label="t.insertCode" @click="insertCodeBlock"><AppIcon name="code" :size="17" /></button>
+          <div class="more-tools-control">
+            <button ref="moreToolsTrigger" type="button" class="toolbar-button" :class="{ active: showMoreTools }" :title="t.moreTools" :aria-label="t.moreTools" aria-haspopup="true" aria-controls="more-tools-menu" :aria-expanded="showMoreTools" @click="toggleMoreTools"><AppIcon name="more" :size="17" /></button>
+            <div v-if="showMoreTools" id="more-tools-menu" ref="moreToolsMenu" class="more-tools-menu" role="group" :aria-label="t.moreTools">
+              <button type="button" @click="formatMarkdown('italic')"><AppIcon name="italic" :size="16" />{{ t.insertItalic }}</button>
+              <button type="button" @click="formatMarkdown('strike')"><AppIcon name="strike" :size="16" />{{ t.insertStrike }}</button>
+              <button type="button" @click="formatMarkdown('bullet')"><AppIcon name="list" :size="16" />{{ t.insertBullet }}</button>
+              <button type="button" @click="formatMarkdown('ordered')"><AppIcon name="ordered" :size="16" />{{ t.insertOrdered }}</button>
+              <button type="button" @click="formatMarkdown('quote')"><AppIcon name="quote" :size="16" />{{ t.insertQuote }}</button>
+              <button type="button" @click="formatMarkdown('image')"><AppIcon name="image" :size="16" />{{ t.insertImage }}</button>
+              <button type="button" @click="formatMarkdown('table')"><AppIcon name="table" :size="16" />{{ t.insertTable }}</button>
+              <button type="button" @click="formatMarkdown('math')"><AppIcon name="math" :size="16" />{{ t.insertMath }}</button>
+              <button type="button" @click="formatMarkdown('codeBlock')"><AppIcon name="code" :size="16" />{{ t.insertCode }}</button>
+              <button type="button" @click="formatMarkdown('callout')"><AppIcon name="quote" :size="16" />{{ t.insertCallout }}</button>
+              <button type="button" @click="formatMarkdown('tabs')"><AppIcon name="split" :size="16" />{{ t.insertTabs }}</button>
+            </div>
+          </div>
         </div>
-        <div class="view-switcher" role="tablist">
-          <button :class="{ active: viewMode === 'edit' }" :aria-selected="viewMode === 'edit'" @click="viewMode = 'edit'"><AppIcon name="edit" :size="16" /><span>{{ t.edit }}</span></button>
-          <button :class="{ active: viewMode === 'split' }" :aria-selected="viewMode === 'split'" @click="viewMode = 'split'"><AppIcon name="split" :size="16" /><span>{{ t.split }}</span></button>
-          <button :class="{ active: viewMode === 'preview' }" :aria-selected="viewMode === 'preview'" @click="viewMode = 'preview'"><AppIcon name="eye" :size="16" /><span>{{ t.preview }}</span></button>
+        <div class="view-switcher" role="group" :aria-label="language === 'zh' ? '编辑视图' : 'Editor view'">
+          <button type="button" :class="{ active: viewMode === 'edit' }" :aria-pressed="viewMode === 'edit'" @click="viewMode = 'edit'"><AppIcon name="edit" :size="16" /><span>{{ t.edit }}</span></button>
+          <button type="button" :class="{ active: viewMode === 'split' }" :aria-pressed="viewMode === 'split'" @click="viewMode = 'split'"><AppIcon name="split" :size="16" /><span>{{ t.split }}</span></button>
+          <button type="button" :class="{ active: viewMode === 'preview' }" :aria-pressed="viewMode === 'preview'" @click="viewMode = 'preview'"><AppIcon name="eye" :size="16" /><span>{{ t.preview }}</span></button>
         </div>
       </div>
 
       <section class="editor-stage" :class="`mode-${viewMode}`">
-        <div v-if="viewMode !== 'preview'" class="editor-pane">
-          <div class="editor-gutter" aria-hidden="true"><span v-for="line in lineCount" :key="line">{{ String(line).padStart(2, '0') }}</span></div>
-          <textarea ref="editor" class="editor-input" :value="activeNote?.content" :placeholder="t.bodyPlaceholder" spellcheck="false" @input="updateNote('content', $event.target.value)"></textarea>
+        <div v-show="viewMode !== 'preview'" class="editor-pane">
+          <MarkdownEditor
+            ref="editor"
+            :model-value="activeNote?.content || ''"
+            :note-id="activeNote?.id || ''"
+            :initial-state="activeEditorState"
+            :placeholder="t.bodyPlaceholder"
+            :theme="theme"
+            :aria-label="language === 'zh' ? 'Markdown 编辑器' : 'Markdown editor'"
+            @update:model-value="updateNote('content', $event)"
+            @cursor-change="handleCursorChange"
+            @history-change="handleHistoryChange"
+            @state-change="handleEditorState"
+          />
         </div>
         <div v-if="viewMode !== 'edit'" class="preview-pane">
           <div class="preview-label">READING VIEW</div>
@@ -657,24 +978,32 @@ function formatTime(timestamp) {
       </section>
 
       <footer class="statusbar">
-        <div><span class="status-dot"></span>{{ t.saved }}</div><div class="status-stats"><span>{{ wordCount }} {{ t.words }}</span><span>{{ lineCount }} {{ t.lines }}</span><span>Ln 01, Col 01</span><button class="status-action" :class="{ disabled: !contentHistory.length }" :disabled="!contentHistory.length" :title="t.undo" :aria-label="t.undo" @click="undoContent"><AppIcon name="undo" :size="15" /></button></div>
+        <div><span class="status-dot" :class="{ online: syncEndpoint }"></span>{{ t.saved }}</div><div class="status-stats"><span>{{ wordCount }} {{ t.words }}</span><span>{{ lineCount }} {{ t.lines }}</span><span>Ln {{ editorCursor.line }}, Col {{ editorCursor.column }}</span><button type="button" class="status-action" :disabled="!editorHistory.canUndo" :title="t.undo" :aria-label="t.undo" @click="undoContent"><AppIcon name="undo" :size="15" /></button><button type="button" class="status-action" :disabled="!editorHistory.canRedo" :title="t.redo" :aria-label="t.redo" @click="redoContent"><AppIcon name="redo" :size="15" /></button></div>
       </footer>
     </main>
 
-    <div v-if="showSettings" class="modal-backdrop" @click.self="showSettings = false">
-      <section class="settings-modal" role="dialog" aria-modal="true" :aria-label="t.settings">
-        <div class="modal-header"><div><span class="eyebrow">NOTIDE / PREFERENCES</span><h2>{{ t.settings }}</h2></div><button class="icon-button" :title="t.close" :aria-label="t.close" @click="showSettings = false"><AppIcon name="close" :size="18" /></button></div>
-        <label class="setting-row"><span>{{ t.language }}</span><select v-model="language"><option value="zh">中文</option><option value="en">English</option></select></label>
-        <label class="setting-row"><span>{{ t.light }} / {{ t.dark }}</span><button class="theme-toggle" :title="theme === 'light' ? t.dark : t.light" @click="theme = theme === 'light' ? 'dark' : 'light'"><span :class="{ active: theme === 'light' }"><AppIcon name="sun" :size="15" /></span><span :class="{ active: theme === 'dark' }"><AppIcon name="moon" :size="15" /></span></button></label>
-        <label class="setting-stack"><span>{{ t.syncEndpoint }}</span><input v-model="syncEndpoint" placeholder="https://notide-sync.example.workers.dev" /><input v-model="syncToken" type="password" placeholder="SYNC_TOKEN (optional)" /><small>{{ t.endpointHint }}</small></label>
-        <div class="modal-actions"><button class="ghost-button" @click="showSettings = false">{{ t.close }}</button><button class="primary-button" @click="syncNote(); showSettings = false">{{ t.sync }}</button></div>
+    <div v-if="showSettings" class="modal-backdrop" @click.self="closeSettings">
+      <section ref="settingsModal" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" @keydown.tab="trapModalFocus($event, settingsModal)">
+        <div class="modal-header"><div><span class="eyebrow">NOTIDE / PREFERENCES</span><h2 id="settings-title">{{ t.settings }}</h2></div><button type="button" class="icon-button" :title="t.close" :aria-label="t.close" @click="closeSettings"><AppIcon name="close" :size="18" /></button></div>
+        <label class="setting-row" for="notide-language"><span>{{ t.language }}</span><select id="notide-language" ref="settingsFirstControl" v-model="settingsDraft.language"><option value="zh">中文</option><option value="en">English</option></select></label>
+        <div class="setting-row"><span>{{ t.light }} / {{ t.dark }}</span><button type="button" class="theme-toggle" role="switch" :aria-checked="settingsDraft.theme === 'dark'" :aria-label="settingsDraft.theme === 'light' ? t.dark : t.light" :title="settingsDraft.theme === 'light' ? t.dark : t.light" @click="settingsDraft.theme = settingsDraft.theme === 'light' ? 'dark' : 'light'"><span :class="{ active: settingsDraft.theme === 'light' }"><AppIcon name="sun" :size="15" /></span><span :class="{ active: settingsDraft.theme === 'dark' }"><AppIcon name="moon" :size="15" /></span></button></div>
+        <div class="setting-stack">
+          <label for="notide-sync-endpoint">{{ t.syncEndpoint }}</label>
+          <input id="notide-sync-endpoint" v-model.trim="settingsDraft.syncEndpoint" inputmode="url" autocomplete="url" placeholder="https://notide-sync.example.workers.dev" aria-describedby="sync-endpoint-help sync-connection-result" :aria-invalid="connectionState === 'error' ? 'true' : undefined" />
+          <label for="notide-sync-token">{{ t.syncToken }}</label>
+          <input id="notide-sync-token" v-model="settingsDraft.syncToken" type="password" autocomplete="off" placeholder="SYNC_TOKEN" aria-describedby="sync-endpoint-help sync-connection-result" :aria-invalid="connectionState === 'error' ? 'true' : undefined" />
+          <small id="sync-endpoint-help">{{ t.endpointHint }} {{ t.disconnect }}</small>
+        </div>
+        <label class="remember-token"><input v-model="settingsDraft.rememberToken" type="checkbox" /><span>{{ t.rememberToken }}</span></label>
+        <p id="sync-connection-result" class="connection-result" :class="[connectionState, { empty: !connectionMessage }]" :role="connectionState === 'error' ? 'alert' : 'status'" aria-live="polite">{{ connectionMessage }}</p>
+        <div class="modal-actions"><button type="button" class="ghost-button" @click="closeSettings">{{ t.close }}</button><button type="button" class="ghost-button" :disabled="settingsBusy" @click="testDraftConnection">{{ connectionState === 'testing' ? t.connectionTesting : t.testConnection }}</button><button type="button" class="primary-button" :disabled="settingsBusy" @click="saveSettingsAndSync">{{ isSavingSettings ? t.syncing : t.saveAndSync }}</button></div>
       </section>
     </div>
 
-    <div v-if="showDeleteConfirm" class="modal-backdrop" @click.self="showDeleteConfirm = false">
-      <section class="settings-modal confirm-modal" role="dialog" aria-modal="true" :aria-label="t.delete">
-        <div class="modal-header"><div><span class="eyebrow">NOTIDE / {{ t.delete }}</span><h2>{{ t.deleteConfirm }}</h2></div><button class="icon-button" :title="t.cancel" :aria-label="t.cancel" @click="showDeleteConfirm = false"><AppIcon name="close" :size="18" /></button></div>
-        <div class="modal-actions"><button class="ghost-button" @click="showDeleteConfirm = false">{{ t.cancel }}</button><button class="primary-button danger-button" @click="deleteNote">{{ t.confirm }}</button></div>
+    <div v-if="showDeleteConfirm" class="modal-backdrop" @click.self="closeDeleteConfirm">
+      <section ref="deleteModal" class="settings-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" @keydown.tab="trapModalFocus($event, deleteModal)">
+        <div class="modal-header"><div><span class="eyebrow">NOTIDE / {{ t.delete }}</span><h2 id="delete-title">{{ t.deleteConfirm }}</h2></div><button type="button" class="icon-button" :title="t.cancel" :aria-label="t.cancel" @click="closeDeleteConfirm"><AppIcon name="close" :size="18" /></button></div>
+        <div class="modal-actions"><button ref="deleteCancelButton" type="button" class="ghost-button" @click="closeDeleteConfirm">{{ t.cancel }}</button><button type="button" class="primary-button danger-button" @click="deleteNote">{{ t.confirm }}</button></div>
       </section>
     </div>
   </div>

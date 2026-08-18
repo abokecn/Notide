@@ -2,6 +2,8 @@ name = "notide-sync"
 main = "workers/index.js"
 compatibility_date = "2026-08-17"
 
+# Keep non-secret runtime bindings in Git. Configure SYNC_TOKEN as an encrypted
+# runtime secret in Cloudflare; Wrangler preserves it across deployments.
 [[r2_buckets]]
 binding = "NOTES_BUCKET"
   bucket_name = "notide-notes"

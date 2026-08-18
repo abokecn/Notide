@@ -1,8 +1,64 @@
 const collectionPath = '/api/notes'
+const healthPath = '/api/health'
+
+export class SyncConnectionError extends Error {
+  constructor(code, { status = null, cause } = {}) {
+    super(code)
+    this.name = 'SyncConnectionError'
+    this.code = code
+    this.status = status
+    if (cause) this.cause = cause
+  }
+}
+
+export function normalizeSyncEndpoint(endpoint) {
+  const value = String(endpoint || '').trim()
+  if (!value) throw new SyncConnectionError('sync_endpoint_required')
+
+  let url
+  try {
+    url = new URL(value)
+  } catch (cause) {
+    throw new SyncConnectionError('sync_endpoint_invalid', { cause })
+  }
+
+  if (!['http:', 'https:'].includes(url.protocol)) throw new SyncConnectionError('sync_endpoint_protocol')
+  if (url.username || url.password || url.search || url.hash) throw new SyncConnectionError('sync_endpoint_invalid')
+
+  const hostname = url.hostname.toLowerCase()
+  const localHttp = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]' || hostname.endsWith('.localhost')
+  if (url.protocol === 'http:' && !localHttp) throw new SyncConnectionError('sync_endpoint_insecure')
+
+  url.pathname = url.pathname.replace(/\/api\/notes\/?$/i, '').replace(/\/+$/, '')
+  return url.toString().replace(/\/$/, '')
+}
+
+export async function testSyncConnection({ endpoint, token = '', fetchImpl = globalThis.fetch, signal } = {}) {
+  const base = normalizeSyncEndpoint(endpoint)
+  if (typeof fetchImpl !== 'function') throw new SyncConnectionError('sync_fetch_unavailable')
+
+  const options = { method: 'GET', headers: { ...authHeaders(token), accept: 'application/json' }, signal }
+  const healthResponse = await connectionFetch(`${base}${healthPath}`, options, fetchImpl)
+
+  if (healthResponse.status === 404) return testLegacyConnection(base, options, fetchImpl)
+  assertConnectionStatus(healthResponse)
+  const payload = await connectionJson(healthResponse)
+
+  if (payload?.ok === true && payload.service === 'notide-sync' && payload.storage === 'ready' && Number.isFinite(payload.version)) {
+    return { ok: true, endpoint: base, service: payload.service, version: payload.version, storage: payload.storage, legacy: false }
+  }
+
+  // Older Notide Workers return service metadata for unknown routes. Verify their
+  // R2 binding through the read-only collection endpoint before accepting them.
+  if (payload?.service === 'notide-sync' && Number.isFinite(payload.version)) {
+    return testLegacyConnection(base, options, fetchImpl)
+  }
+  throw new SyncConnectionError('sync_service_mismatch')
+}
 
 export async function syncWorkspace({ endpoint, token = '', notes = [], tombstones = [], fetchImpl = globalThis.fetch }) {
-  const base = endpoint?.trim().replace(/\/$/, '')
-  if (!base) return { notes, tombstones, uploaded: 0, downloaded: 0 }
+  if (!String(endpoint || '').trim()) return { notes, tombstones, uploaded: 0, downloaded: 0 }
+  const base = normalizeSyncEndpoint(endpoint)
   if (typeof fetchImpl !== 'function') throw new Error('fetch_unavailable')
 
   const { remoteNotes, remoteDeleted } = await fetchRemoteNotes(base, token, fetchImpl)
@@ -85,6 +141,43 @@ async function fetchRemoteNotes(base, token, fetchImpl) {
 
 function authHeaders(token) {
   return token ? { authorization: `Bearer ${token}` } : {}
+}
+
+async function testLegacyConnection(base, options, fetchImpl) {
+  const response = await connectionFetch(`${base}${collectionPath}`, options, fetchImpl)
+  assertConnectionStatus(response)
+  const payload = await connectionJson(response)
+  if (!Array.isArray(payload?.notes) || !Array.isArray(payload?.deleted)) {
+    throw new SyncConnectionError('sync_response_invalid')
+  }
+  return { ok: true, endpoint: base, service: 'notide-sync', version: 1, storage: 'ready', legacy: true }
+}
+
+async function connectionFetch(url, options, fetchImpl) {
+  try {
+    return await fetchImpl(url, options)
+  } catch (cause) {
+    if (cause?.name === 'AbortError') throw new SyncConnectionError('sync_connection_aborted', { cause })
+    throw new SyncConnectionError('sync_network_or_cors', { cause })
+  }
+}
+
+function assertConnectionStatus(response) {
+  if (response.ok) return
+  if (response.status === 401) throw new SyncConnectionError('sync_auth_unauthorized', { status: response.status })
+  if (response.status === 403) throw new SyncConnectionError('sync_auth_forbidden', { status: response.status })
+  if (response.status === 404) throw new SyncConnectionError('sync_endpoint_not_found', { status: response.status })
+  if (response.status === 503) throw new SyncConnectionError('sync_storage_unavailable', { status: response.status })
+  if (response.status >= 500) throw new SyncConnectionError('sync_service_unavailable', { status: response.status })
+  throw new SyncConnectionError('sync_connection_rejected', { status: response.status })
+}
+
+async function connectionJson(response) {
+  try {
+    return await response.json()
+  } catch (cause) {
+    throw new SyncConnectionError('sync_response_invalid', { status: response.status, cause })
+  }
 }
 
 async function putRemote(base, token, note, revision, fetchImpl) {

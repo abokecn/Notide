@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { enhanceMermaid, renderMarkdown } from './markdown.js'
 
 const props = defineProps({
@@ -9,13 +9,32 @@ const props = defineProps({
   onNavigate: { type: Function, default: null },
 })
 const root = ref(null)
-const rendered = computed(() => {
-  void props.locale
-  return renderMarkdown(props.source)
-})
+const rendered = ref('')
+const rendering = ref(false)
+let renderId = 0
+let disposeMermaid = () => {}
 
-watch(rendered, () => nextTick(() => enhanceMermaid(root.value)))
-onMounted(() => nextTick(() => enhanceMermaid(root.value)))
+async function refreshPreview() {
+  const currentRender = ++renderId
+  rendering.value = true
+  try {
+    const html = await renderMarkdown(props.source)
+    if (currentRender !== renderId) return
+    disposeMermaid()
+    disposeMermaid = () => {}
+    rendered.value = html
+    await nextTick()
+    if (currentRender !== renderId) return
+    disposeMermaid = enhanceMermaid(root.value)
+  } catch (error) {
+    console.error('Markdown preview rendering failed', error)
+  } finally {
+    if (currentRender === renderId) rendering.value = false
+  }
+}
+
+watch(() => [props.source, props.locale], refreshPreview, { immediate: true })
+onBeforeUnmount(() => { renderId++; disposeMermaid() })
 
 function handleClick(event) {
   const target = event.target instanceof Element ? event.target : null
@@ -57,5 +76,5 @@ function handleChange(event) {
 </script>
 
 <template>
-  <article ref="root" class="markdown-body" v-html="rendered" @click="handleClick" @change="handleChange"></article>
+  <article ref="root" class="markdown-body" :aria-busy="rendering" v-html="rendered" @click="handleClick" @change="handleChange"></article>
 </template>

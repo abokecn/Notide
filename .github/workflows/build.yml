@@ -17,6 +17,14 @@ jobs:
       - run: npm ci
       - run: npm run test:unit
       - run: npm run build
+      - name: Enforce web bundle budgets
+        run: >-
+          node tools/check-bundle-size.mjs web dist
+          --max-total-mib 6
+          --max-editor-raw-kib 650
+          --max-editor-gzip-kib 220
+          --max-preview-raw-kib 250
+          --max-preview-gzip-kib 90
 
   windows:
     runs-on: windows-latest
@@ -69,6 +77,8 @@ jobs:
         env:
           NO_COLOR: 1
           CARGO_TERM_COLOR: never
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_PROFILE_DEV_STRIP: symbols
         run: |
           set -o pipefail
           npm run native:android -- --target aarch64 --verbose 2>&1 | tee android-build.log
@@ -130,9 +140,114 @@ jobs:
           path: android-build.log
           retention-days: 3
           if-no-files-found: error
+      - name: Verify Android debug APK
+        shell: bash
+        run: |
+          mapfile -d '' -t debug_apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-debug.apk' -print0)
+          if [[ ${#debug_apks[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one debug APK, found ${#debug_apks[@]}"
+            printf '%s\n' "${debug_apks[@]}"
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "${debug_apks[0]}"
+          node tools/check-bundle-size.mjs apk "${debug_apks[0]}" --max-apk-mib 30 --required-abi arm64-v8a
       - name: Upload Android debug APK
         uses: actions/upload-artifact@v4
         with:
           name: notide-android
           if-no-files-found: error
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*-debug.apk
+      - name: Detect Android release signing
+        id: android-release
+        shell: bash
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          configured=0
+          [[ -n "$ANDROID_KEY_BASE64" ]] && configured=$((configured + 1))
+          [[ -n "$ANDROID_KEY_ALIAS" ]] && configured=$((configured + 1))
+          [[ -n "$ANDROID_KEY_PASSWORD" ]] && configured=$((configured + 1))
+          if [[ $configured -eq 0 ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Android release signing is not configured; release APK/AAB will be skipped."
+          elif [[ $configured -ne 3 ]]; then
+            echo "::error::Android release signing is incomplete. Configure ANDROID_KEY_BASE64, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD together."
+            exit 1
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Configure Android release signing
+        if: ${{ steps.android-release.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/notide-release.jks"
+          printf '%s' "$ANDROID_KEY_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          keytool -list -keystore "$keystore" -storepass "$ANDROID_KEY_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null
+          printf 'keyAlias=%s\npassword=%s\nstoreFile=%s\n' "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" "$keystore" > src-tauri/gen/android/keystore.properties
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const file = "src-tauri/gen/android/app/build.gradle.kts";
+            let source = fs.readFileSync(file, "utf8");
+            const buildTypes = "    buildTypes {";
+            const release = /(\s*getByName\("release"\)\s*\{\r?\n)/;
+            if (!source.includes(buildTypes)) throw new Error("Android buildTypes block not found");
+            if (!release.test(source)) throw new Error("Android release build type not found");
+            const signing = [
+              "    signingConfigs {",
+              "        create(\"release\") {",
+              "            val keystorePropertiesFile = rootProject.file(\"keystore.properties\")",
+              "            val keystoreProperties = java.util.Properties()",
+              "            keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))",
+              "            keyAlias = keystoreProperties[\"keyAlias\"] as String",
+              "            keyPassword = keystoreProperties[\"password\"] as String",
+              "            storeFile = file(keystoreProperties[\"storeFile\"] as String)",
+              "            storePassword = keystoreProperties[\"password\"] as String",
+              "        }",
+              "    }",
+              "",
+              "",
+            ].join("\n");
+            source = source.replace(buildTypes, signing + buildTypes);
+            source = source.replace(release, (match) => match + "            signingConfig = signingConfigs.getByName(\"release\")\n");
+            fs.writeFileSync(file, source);
+          '
+      - name: Build signed Android release APK and AAB
+        if: ${{ steps.android-release.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          NO_COLOR: 1
+          CARGO_TERM_COLOR: never
+        run: |
+          set -o pipefail
+          npm run native:android:release -- --target aarch64 --verbose 2>&1 | tee android-release-build.log
+      - name: Verify signed Android release bundles
+        if: ${{ steps.android-release.outputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          mapfile -d '' -t release_apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-release.apk' -print0)
+          mapfile -d '' -t release_aabs < <(find src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' -print0)
+          if [[ ${#release_apks[@]} -ne 1 || ${#release_aabs[@]} -ne 1 ]]; then
+            echo "::error::Expected one release APK and one AAB; found ${#release_apks[@]} APK and ${#release_aabs[@]} AAB"
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "${release_apks[0]}"
+          aab_verification="$(jarsigner -verify "${release_aabs[0]}" 2>&1)"
+          printf '%s\n' "$aab_verification"
+          grep -q 'jar verified' <<< "$aab_verification"
+          node tools/check-bundle-size.mjs apk "${release_apks[0]}" --max-apk-mib 30 --required-abi arm64-v8a
+      - name: Upload signed Android release bundles
+        if: ${{ steps.android-release.outputs.enabled == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: notide-android-release
+          if-no-files-found: error
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*-release.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
