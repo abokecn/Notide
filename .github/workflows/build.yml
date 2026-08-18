@@ -63,6 +63,9 @@ jobs:
       - run: npx tauri android init
       - name: Build Android debug APK
         shell: bash
+        env:
+          NO_COLOR: 1
+          CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
           npm run native:android 2>&1 | tee android-build.log
@@ -75,6 +78,11 @@ jobs:
             echo '```text'
             if [[ -f android-build.log ]]; then
               tail -n 120 android-build.log
+              details="$(tail -n 120 android-build.log)"
+              details="${details//'%'/'%25'}"
+              details="${details//$'\r'/'%0D'}"
+              details="${details//$'\n'/'%0A'}"
+              echo "::error title=Android build failure::$details"
             else
               echo "The build stopped before the Android log was created."
             fi
