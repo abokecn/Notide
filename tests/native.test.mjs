@@ -34,6 +34,8 @@ test('native clients are configured for Tauri desktop and Android builds', () =>
   assert.match(workflow, /ANDROID_NDK_HOME=.*29\.0\.13846066/)
   assert.match(workflow, /android-build\.log/)
   assert.match(workflow, /::error title=Android build failure::/)
+  assert.match(workflow, /::error title=Android post-Rust failure::/)
+  assert.match(workflow, /> Task :app:rustBuildArm64Debug/)
   assert.match(workflow, /::error title=Android Gradle failure::/)
   assert.match(workflow, /::error title=Android matched errors::/)
   assert.match(workflow, /tail -c 3500/)

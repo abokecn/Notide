@@ -88,18 +88,22 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ -f android-build.log ]]; then
-            annotation="$(tail -n 45 android-build.log | tail -c 3500)"
+            fallback="$(tail -n 45 android-build.log | tail -c 3500)"
+            post_rust="$(awk '/> Task :app:rustBuildArm64Debug/ { capture=1 } capture && /FAILURE: Build failed with an exception/ { exit } capture && NF && length($0) <= 800 && $0 !~ /file or directory .* not found|Could not execute \[report metric|Error \[tauri_cli_node\] failed to build APK|Error failed to build APK|Io\(BeforeSpawn|Cmd\(\[/ { print }' android-build.log | tail -n 160 | tail -c 7000)"
             gradle="$(awk '/FAILURE: Build failed with an exception/ { capture=1 } capture && length($0) <= 800 { print } capture && /BUILD FAILED/ { exit }' android-build.log | head -c 3500)"
-            filtered="$(awk 'BEGIN { IGNORECASE=1 } /FAILURE:|What went wrong|Execution failed|Caused by:|error:|A problem occurred|Could not|failed to|not found|No such file|Exception/ && $0 !~ /Error failed to build APK|Io\(BeforeSpawn|Cmd\(\[/ && length($0) <= 800 { print }' android-build.log | tail -n 80 | tail -c 3500)"
+            filtered="$(awk 'BEGIN { IGNORECASE=1 } /FAILURE:|What went wrong|Execution failed|Caused by:|error:|A problem occurred|Could not|failed to|not found|No such file|Exception|missing|required runtime symbols|failed to validate library|unsupported/ && $0 !~ /not found file or directory|Could not execute \[report metric|Error \[tauri_cli_node\] failed to build APK|Error failed to build APK|Io\(BeforeSpawn|Cmd\(\[/ && length($0) <= 800 { print }' android-build.log | tail -n 80 | tail -c 3500)"
           else
-            annotation="$details"
+            fallback="$details"
+            post_rust=""
             gradle=""
             filtered=""
           fi
-          annotation="${annotation//'%'/'%25'}"
-          annotation="${annotation//$'\r'/'%0D'}"
-          annotation="${annotation//$'\n'/'%0A'}"
-          echo "::error title=Android build failure::$annotation"
+          if [[ -n "$post_rust" ]]; then
+            post_rust="${post_rust//'%'/'%25'}"
+            post_rust="${post_rust//$'\r'/'%0D'}"
+            post_rust="${post_rust//$'\n'/'%0A'}"
+            echo "::error title=Android post-Rust failure::$post_rust"
+          fi
           if [[ -n "$gradle" ]]; then
             gradle="${gradle//'%'/'%25'}"
             gradle="${gradle//$'\r'/'%0D'}"
@@ -111,6 +115,12 @@ jobs:
             filtered="${filtered//$'\r'/'%0D'}"
             filtered="${filtered//$'\n'/'%0A'}"
             echo "::error title=Android matched errors::$filtered"
+          fi
+          if [[ -z "$post_rust$gradle$filtered" ]]; then
+            fallback="${fallback//'%'/'%25'}"
+            fallback="${fallback//$'\r'/'%0D'}"
+            fallback="${fallback//$'\n'/'%0A'}"
+            echo "::error title=Android build failure::$fallback"
           fi
       - name: Upload Android build log
         if: ${{ failure() && hashFiles('android-build.log') != '' }}
