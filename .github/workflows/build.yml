@@ -71,7 +71,7 @@ jobs:
           CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
-          npm run native:android -- --target aarch64 2>&1 | tee android-build.log
+          npm run native:android -- --target aarch64 --verbose 2>&1 | tee android-build.log
       - name: Publish Android failure details
         if: failure()
         shell: bash
@@ -89,21 +89,37 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ -f android-build.log ]]; then
             annotation="$(tail -n 45 android-build.log | tail -c 3500)"
-            filtered="$(grep -Ei 'FAILURE:|What went wrong|Execution failed|Caused by:|error:|A problem occurred|Could not|failed to|not found|No such file|Exception' android-build.log | tail -n 80 | tail -c 3500 || true)"
+            gradle="$(awk '/FAILURE: Build failed with an exception/ { capture=1 } capture && length($0) <= 800 { print } capture && /BUILD FAILED/ { exit }' android-build.log | head -c 3500)"
+            filtered="$(awk 'BEGIN { IGNORECASE=1 } /FAILURE:|What went wrong|Execution failed|Caused by:|error:|A problem occurred|Could not|failed to|not found|No such file|Exception/ && $0 !~ /Error failed to build APK|Io\(BeforeSpawn|Cmd\(\[/ && length($0) <= 800 { print }' android-build.log | tail -n 80 | tail -c 3500)"
           else
             annotation="$details"
+            gradle=""
             filtered=""
           fi
           annotation="${annotation//'%'/'%25'}"
           annotation="${annotation//$'\r'/'%0D'}"
           annotation="${annotation//$'\n'/'%0A'}"
           echo "::error title=Android build failure::$annotation"
+          if [[ -n "$gradle" ]]; then
+            gradle="${gradle//'%'/'%25'}"
+            gradle="${gradle//$'\r'/'%0D'}"
+            gradle="${gradle//$'\n'/'%0A'}"
+            echo "::error title=Android Gradle failure::$gradle"
+          fi
           if [[ -n "$filtered" ]]; then
             filtered="${filtered//'%'/'%25'}"
             filtered="${filtered//$'\r'/'%0D'}"
             filtered="${filtered//$'\n'/'%0A'}"
             echo "::error title=Android matched errors::$filtered"
           fi
+      - name: Upload Android build log
+        if: ${{ failure() && hashFiles('android-build.log') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: notide-android-build-log
+          path: android-build.log
+          retention-days: 3
+          if-no-files-found: error
       - name: Upload Android debug APK
         uses: actions/upload-artifact@v4
         with:
