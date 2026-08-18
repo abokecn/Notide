@@ -20,6 +20,7 @@ test('native clients are configured for Tauri desktop and Android builds', () =>
   assert.equal(config.bundle.active, true)
   assert.equal(config.identifier, 'com.abokecn.notide')
   assert.equal(packageJson.name, 'notide')
+  assert.equal(packageJson.scripts.tauri, 'tauri')
   assert.match(cargo, /name = "notide"/)
   assert.match(cargo, /name = "notide_lib"/)
   assert.equal(packageJson.scripts['native:android:init'], 'tauri android init')
