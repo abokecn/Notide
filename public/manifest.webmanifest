@@ -4,8 +4,8 @@
   "description": "A calm cross-platform Markdown notebook for notes that stay yours.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#131110",
-  "theme_color": "#0B0D10",
+  "background_color": "#15344A",
+  "theme_color": "#15344A",
   "icons": [
     { "src": "/notide-icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
     { "src": "/icons/192x192.png", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },

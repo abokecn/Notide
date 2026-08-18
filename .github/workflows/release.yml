@@ -1,0 +1,297 @@
+name: Notide signed release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notide-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npm run check:size
+      - name: Verify tag and application versions
+        run: npm run release:check-version -- "$GITHUB_REF_NAME"
+      - name: Require every release signing secret
+        shell: bash
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          required=(
+            WINDOWS_PFX_BASE64 WINDOWS_PFX_PASSWORD
+            TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD TAURI_UPDATER_PUBLIC_KEY
+            ANDROID_KEY_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::Signed release blocked. Missing GitHub Secrets: ${missing[*]}"
+            exit 1
+          fi
+      - name: Export release version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: release-gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Import Windows code-signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'notide-windows-signing.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_PFX_PASSWORD -AsPlainText -Force
+          $imported = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+          $privateCertificates = @($imported | Where-Object { $_.HasPrivateKey })
+          if ($privateCertificates.Count -ne 1) { throw 'The Windows PFX must contain exactly one private signing certificate.' }
+          $certificate = $privateCertificates[0]
+          "WINDOWS_CERT_THUMBPRINT=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Append
+      - name: Create signed Tauri release configuration
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: node tools/create-tauri-release-config.mjs --output "$env:RUNNER_TEMP/notide-tauri-release.json"
+      - name: Build signed Windows installers and updater
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --config "$env:RUNNER_TEMP/notide-tauri-release.json" -- --locked
+      - name: Verify Authenticode and stage Windows release
+        shell: pwsh
+        env:
+          NOTIDE_VERSION: ${{ needs.release-gate.outputs.version }}
+        run: |
+          $exe = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe -File)
+          $msi = @(Get-ChildItem src-tauri/target/release/bundle/msi -Filter *.msi -File)
+          if ($exe.Count -ne 1 -or $msi.Count -ne 1) {
+            throw "Expected one EXE and one MSI; found $($exe.Count) and $($msi.Count)."
+          }
+          $updaterSignature = Get-Item "$($exe[0].FullName).sig" -ErrorAction Stop
+          if ($updaterSignature.Length -eq 0) { throw 'The Tauri updater signature is empty.' }
+          foreach ($installer in @($exe[0], $msi[0])) {
+            $signature = Get-AuthenticodeSignature $installer.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Authenticode verification failed for $($installer.Name): $($signature.Status)"
+            }
+            if ($signature.SignerCertificate.Thumbprint -ne $env:WINDOWS_CERT_THUMBPRINT) {
+              throw "Unexpected Authenticode certificate on $($installer.Name)."
+            }
+            if (-not $signature.TimeStamperCertificate) {
+              throw "Authenticode timestamp is missing for $($installer.Name)."
+            }
+          }
+          $certificate = Get-Item "Cert:\CurrentUser\My\$env:WINDOWS_CERT_THUMBPRINT"
+          $certificateSha256 = [Convert]::ToHexString($certificate.GetCertHash([Security.Cryptography.HashAlgorithmName]::SHA256)).ToLowerInvariant()
+          New-Item release-assets -ItemType Directory -Force | Out-Null
+          $prefix = "Notide_$env:NOTIDE_VERSION`_x64"
+          Copy-Item $exe[0].FullName "release-assets/$prefix-setup.exe"
+          Copy-Item $msi[0].FullName "release-assets/$prefix.msi"
+          Copy-Item $updaterSignature.FullName "release-assets/$prefix-setup.exe.sig"
+          Set-Content release-assets/windows-cert-sha256.txt $certificateSha256 -NoNewline
+      - name: Upload signed Windows release
+        uses: actions/upload-artifact@v4
+        with:
+          name: notide-windows
+          if-no-files-found: error
+          path: release-assets/*
+
+  android:
+    needs: release-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android toolchain
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+      - name: Export Android NDK path
+        run: |
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npx tauri android init --ci --skip-targets-install
+      - run: npm run native:android:prepare
+      - name: Configure fixed Android release keystore
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          npm run native:android:signing
+          keytool -list -keystore "$RUNNER_TEMP/notide-release.jks" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null
+          expected_certificate="$(keytool -exportcert -rfc -keystore "$RUNNER_TEMP/notide-release.jks" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$expected_certificate" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not read the configured Android certificate SHA-256 digest"
+            exit 1
+          fi
+          echo "ANDROID_EXPECTED_CERT_SHA256=$expected_certificate" >> "$GITHUB_ENV"
+      - name: Build signed Android APK and AAB
+        env:
+          NO_COLOR: 1
+          CARGO_TERM_COLOR: never
+        run: npm run native:android:release -- --target aarch64 --verbose -- --locked
+      - name: Verify Android signing, architecture, and size
+        shell: bash
+        env:
+          NOTIDE_VERSION: ${{ needs.release-gate.outputs.version }}
+        run: |
+          mapfile -d '' -t apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-release.apk' ! -name '*-unsigned.apk' -print0)
+          mapfile -d '' -t aabs < <(find src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' -print0)
+          if [[ ${#apks[@]} -ne 1 || ${#aabs[@]} -ne 1 ]]; then
+            echo "::error::Expected one signed release APK and one AAB; found ${#apks[@]} APK and ${#aabs[@]} AAB"
+            exit 1
+          fi
+          apk_report="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "${apks[0]}")"
+          printf '%s\n' "$apk_report"
+          certificate_sha256="$(printf '%s\n' "$apk_report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:upper:]' '[:lower:]' | head -n 1)"
+          if [[ ! "$certificate_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not read the Android signing certificate SHA-256 digest"
+            exit 1
+          fi
+          if [[ "$certificate_sha256" != "$ANDROID_EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::The APK was not signed by the configured release keystore"
+            exit 1
+          fi
+          aab_report="$(jarsigner -verify "${aabs[0]}" 2>&1)"
+          printf '%s\n' "$aab_report"
+          grep -q 'jar verified' <<< "$aab_report"
+          aab_certificate="$(keytool -printcert -jarfile "${aabs[0]}" | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]' | head -n 1)"
+          if [[ "$aab_certificate" != "$ANDROID_EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::The AAB was not signed by the configured release keystore"
+            exit 1
+          fi
+          node tools/check-bundle-size.mjs apk "${apks[0]}" --max-apk-mib 30 --required-abi arm64-v8a
+          mkdir -p release-assets
+          cp "${apks[0]}" "release-assets/Notide_${NOTIDE_VERSION}_arm64.apk"
+          cp "${aabs[0]}" "release-assets/Notide_${NOTIDE_VERSION}_arm64.aab"
+          printf '%s' "$certificate_sha256" > release-assets/android-cert-sha256.txt
+      - name: Upload signed Android release
+        uses: actions/upload-artifact@v4
+        with:
+          name: notide-android
+          if-no-files-found: error
+          path: release-assets/*
+
+  publish:
+    needs: [release-gate, windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: notide-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify Tauri updater signature independently
+        shell: bash
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          updater="$(find release-assets -maxdepth 1 -type f -name '*.exe' -print -quit)"
+          signature="$updater.sig"
+          if grep -q '^untrusted comment:' "$signature"; then
+            cp "$signature" "$RUNNER_TEMP/notide.minisig"
+          else
+            base64 --decode "$signature" > "$RUNNER_TEMP/notide.minisig"
+          fi
+          printf '%s' "$TAURI_UPDATER_PUBLIC_KEY" > "$RUNNER_TEMP/notide.pub.input"
+          if grep -q '^untrusted comment:' "$RUNNER_TEMP/notide.pub.input"; then
+            minisign -Vm "$updater" -x "$RUNNER_TEMP/notide.minisig" -p "$RUNNER_TEMP/notide.pub.input"
+          elif [[ "$TAURI_UPDATER_PUBLIC_KEY" == RW* ]]; then
+            minisign -Vm "$updater" -x "$RUNNER_TEMP/notide.minisig" -P "$TAURI_UPDATER_PUBLIC_KEY"
+          else
+            base64 --decode "$RUNNER_TEMP/notide.pub.input" > "$RUNNER_TEMP/notide.pub"
+            minisign -Vm "$updater" -x "$RUNNER_TEMP/notide.minisig" -p "$RUNNER_TEMP/notide.pub"
+          fi
+      - name: Generate signed update manifest
+        env:
+          NOTIDE_VERSION: ${{ needs.release-gate.outputs.version }}
+        run: |
+          published_at="$(git show -s --format=%cI "$GITHUB_REF_NAME")"
+          node tools/create-update-manifest.mjs \
+            --version "$NOTIDE_VERSION" \
+            --tag "$GITHUB_REF_NAME" \
+            --assets release-assets \
+            --notes-file .github/release-notes.md \
+            --published-at "$published_at" \
+            --output release-assets/latest.json
+      - name: Validate update manifest
+        run: node -e "const m=require('./release-assets/latest.json'); if(!m.platforms['windows-x86_64']?.signature || !m.downloads.android?.apk?.sha256) process.exit(1)"
+      - name: Publish GitHub Release and signed assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTIDE_VERSION: ${{ needs.release-gate.outputs.version }}
+        run: |
+          assets=(
+            release-assets/*.exe release-assets/*.exe.sig release-assets/*.msi
+            release-assets/*.apk release-assets/*.aab release-assets/latest.json
+          )
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --latest --notes-file .github/release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --latest \
+              --title "Notide $NOTIDE_VERSION" --notes-file .github/release-notes.md
+          fi

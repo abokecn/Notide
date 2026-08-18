@@ -2,91 +2,171 @@
 
 [English](../README.md) | 中文
 
-Notide 是一款轻量的 Vue 3 Markdown 笔记应用，采用安静、纸张化的工作台界面。浏览器、Windows 与 Android 客户端共享同一套前端，支持离线优先编辑、Notide 语法规范，以及可选的 Cloudflare R2 跨端同步。
+Notide 是一款面向浏览器、Windows 和 Android 的轻量 Vue 3 Markdown 笔记应用，支持离线优先编辑、Notide 语法规范、按账号隔离的 Cloudflare 同步，以及 Tauri 2 原生安装包。
 
 ## 本地运行
 
+需要 Node.js 20 或更高版本。
+
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
+## 本地 Markdown 文件
+
+点击**新建笔记**旁的文件按钮，或按 `Ctrl/Cmd+O`，即可一次打开一个或多个 `.md`、`.markdown`、`.mdown` 或 `.mkd` 文件。Notide 会完整保留源文本，将文件加入当前工作区，并沿用该工作区现有的离线保存和同步规则。单个文件最大 1 MiB。编辑器标题栏的下载按钮可将当前笔记导出为 Markdown；Android 在支持时会打开系统分享面板。
+
 ## Cloudflare 同步
 
-可选的 Worker 位于 `workers/index.js`，笔记 JSON 保存在 Cloudflare R2。`wrangler.toml` 将服务命名为 `notide-sync`，并把 `NOTES_BUCKET` 绑定到 `notide-notes` 存储桶。未配置同步端点时，Notide 仍可完全离线使用。
+Notide v0.4 使用两种 Cloudflare 存储服务：
+
+- D1 保存用户、哈希后的会话、笔记索引、集合版本、审计记录和限流状态。
+- R2 保存带版本的笔记 JSON；`NOTES_BUCKET` 必须绑定 `notide-notes` 存储桶。
+
+缺少 D1、R2、数据库迁移或任一启动 Secret 时，Worker 会默认拒绝服务，不会在部署过程中出现暂时公开的 API。
 
 ### 通过 Cloudflare Dashboard 连接 GitHub 部署
 
-这条路径只需要浏览器。Cloudflare Workers Builds 会在生产分支更新后自动重新部署 Worker：
+#### 1. 创建 D1 与 R2
 
-1. 进入 **R2 Object Storage**，创建 `notide-notes` 存储桶。`wrangler.toml` 已引用这个固定名称，因此必须在首次部署前创建。
-2. 进入 **Workers & Pages**，选择 **Create** 和 **Import a repository**。授权 GitHub，选择本仓库，并把 `main` 设为生产分支。
-3. 根目录保持仓库根目录（留空或使用默认值），构建命令留空，部署命令填写 `npx wrangler deploy`。部署会读取 `wrangler.toml` 并创建 `NOTES_BUCKET` 绑定，不要再手工添加第二个 R2 绑定。
-4. 执行首次部署；成功后打开 Worker，复制它的 `workers.dev` 地址。
-5. 进入 **Settings** > **Variables & Secrets**，把 `SYNC_TOKEN` 添加为加密的运行时 Secret，并部署由此生成的新版本。不要把它放进 **Settings** > **Build**：构建 Secret 不会出现在 Worker 处理请求时的运行环境中。
+1. 在 [dash.cloudflare.com](https://dash.cloudflare.com) 打开 **Storage & databases** > **D1 SQL database**，创建名为 `notide` 的数据库，并复制数据库 ID。
+2. 打开 **R2 Object Storage**，创建名为 `notide-notes` 的存储桶。
+3. 在 `wrangler.toml` 中把 `REPLACE_WITH_NOTIDE_D1_DATABASE_ID` 替换为 D1 数据库 ID，然后提交并推送到 `main`。D1 ID 是资源标识，不是账号凭据。
 
-首次部署完成到添加 `SYNC_TOKEN` 之间，API 暂时没有保护；这段时间不要连接 Notide 或上传笔记。如果 Dashboard 提供 build watch paths，可限制为 `workers/**`、`wrangler.toml`、`package.json` 和 `package-lock.json`，避免只修改界面时重复发布 Worker。
+提交后的 Wrangler 配置应同时包含以下绑定：
 
-Dashboard 配置不会反向修改 GitHub。本仓库采用以下配置归属：
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "notide"
+database_id = "你的_D1_数据库_ID"
+migrations_dir = "migrations"
 
-- Git 是 Worker 代码、服务名、兼容日期、路由和 R2 绑定的唯一来源。后续 Git 部署会用 `wrangler.toml` 覆盖 Dashboard 代码编辑器中的修改、普通运行时变量和绑定修改。切换绑定不会删除任何 R2 存储桶中的对象。
-- Cloudflare Dashboard 是加密运行时 `SYNC_TOKEN` 与 Workers Builds 设置的来源。普通部署会保留加密 Secret，只有显式删除 Secret 才会移除。Dashboard 中的普通变量不同；除非明确配置 `keep_vars = true`，否则它们可能在下次部署时被覆盖。
-- 运行时变量、Secret、绑定以及自动创建的资源 ID 都不会被静默提交到 GitHub。只有仓库完全没有 Wrangler 配置时，Cloudflare 才可能提出一个待审核的配置 PR；Notide 已包含该配置。
+[[r2_buckets]]
+binding = "NOTES_BUCKET"
+bucket_name = "notide-notes"
+```
 
-不要同时把 Git 自动部署和 Dashboard 代码编辑器当作两套生产发布流程。请选择 Git 部署或完全手工的 Dashboard 部署之一，否则下一次推送会替换手工代码和绑定配置。
+不要改成只存在于 Dashboard 的手工绑定；后续 Git 部署还会重新读取 `wrangler.toml`。
 
-### 使用 Wrangler 部署
+#### 2. 连接 GitHub 仓库
 
-这条替代路径需要 Node.js 20 或更高版本以及本地仓库。在项目根目录登录 Wrangler，确认当前账户：
+进入 **Workers & Pages**，选择 **Create** > **Import a repository**，授权 GitHub，并填写：
+
+| 字段 | 值 |
+| --- | --- |
+| 仓库 | `abokecn/Notide` |
+| 生产分支 | `main` |
+| 根目录 | `/`（仓库根目录） |
+| 构建命令 | `npm ci && npm run test:unit && npx wrangler d1 migrations apply notide --remote` |
+| 部署命令 | `npm run deploy:worker` |
+
+`wrangler` 已在 `package-lock.json` 固定为 `4.32.0`，这两条命令使用仓库中的版本，不依赖未锁定的全局安装。D1 迁移命令可以长期保留在构建步骤中：Wrangler 会记录已执行的迁移，只应用尚未执行的文件。
+
+如果 Workers Builds 提供 watch paths，可加入 `workers/**`、`migrations/**`、`wrangler.toml`、`package.json` 和 `package-lock.json`。
+
+#### 3. 添加运行时 Secrets
+
+第一个 Worker 版本创建后，打开 **Settings** > **Variables & Secrets**，把以下三项全部添加为加密的运行时 Secret：
+
+| Secret | 用途 |
+| --- | --- |
+| `SUPER_ADMIN_USERNAME` | 启动超级管理员登录名 |
+| `SUPER_ADMIN_PASSWORD` | 足够长且唯一的启动密码 |
+| `AUTH_PEPPER` | 仅服务端保存，用于密码与会话哈希的随机值 |
+
+应添加到运行时区域，而不是 **Build** Secrets。构建 Secret 不会出现在已部署 Worker 处理请求时的环境中。保存后重新部署；缺少任一项时，Worker 会返回 `503 service_not_configured`，而不是开放 API。
+
+创建普通账号前，请安全备份 `AUTH_PEPPER`。更换它会使现有会话失效，也会导致 D1 中已有用户的密码哈希无法再验证，因此它不是日常轮换变量。
+
+#### 4. 验证部署
+
+未登录访问根地址时应显示 API 版本 2：
 
 ```bash
+curl https://notide-sync.<你的子域>.workers.dev/
+```
+
+然后在 Notide 设置中填写 Worker 基础地址，使用超级管理员账号登录并执行“测试连接”。健康响应应包含：
+
+```json
+{"ok":true,"service":"notide-sync","version":2,"storage":"ready","database":"ready"}
+```
+
+常见配置错误：
+
+- `service_not_configured`：缺少绑定或三个运行时 Secret 中的任一项。
+- `database_unavailable`：尚未对绑定的 D1 执行 `migrations/0001_notide_v2.sql`。
+- `storage_unavailable`：D1 或 `NOTES_BUCKET` R2 绑定不可用。
+- `401 unauthorized`：客户端没有有效的 v0.4 登录会话。
+
+需要服务端日志时，可在已登录 Wrangler 的本地仓库运行 `npx wrangler tail notide-sync`。
+
+### Dashboard 修改会影响 GitHub 吗？
+
+在 Dashboard 修改变量、Secret、D1 绑定或 R2 绑定，不会修改 GitHub 仓库。Cloudflare 只会读取仓库进行构建和部署。
+
+Git 是 Worker 代码和普通 Wrangler 配置的唯一来源。下一次 Git 部署可能用 `wrangler.toml` 覆盖 Dashboard 代码编辑器中的修改、普通变量和绑定修改；加密的运行时 Secret 会被普通 Wrangler 部署保留，除非你明确删除。切换绑定不会复制或删除 D1/R2 数据。
+
+不要把 Dashboard 代码编辑器作为 Git 自动部署之外的第二套生产发布流程。
+
+### 允许的 Web 来源
+
+未额外配置时，Worker 返回 `Access-Control-Allow-Origin: *`，使托管 Web 页面和原生 WebView 能共用同一 API。服务不使用 Cookie 鉴权；每个受保护请求仍必须携带 `/api/auth/login` 签发的 Bearer 会话。允许任意来源并不等于绕过账号认证。
+
+如需限制浏览器来源，可在 **设置** > **变量和 Secret** 中添加普通运行时变量 `ALLOWED_ORIGINS`。值为以逗号或空白分隔的精确 Origin，不含路径和末尾斜杠，例如 `https://notide.pages.dev,https://notes.example.com`。没有 `Origin` 请求头的原生客户端仍可连接。该值不敏感，无需保存为 Secret。
+
+只在 Dashboard 设置普通变量不会修改 GitHub，并且后续 Git 部署可能覆盖它。若要让限制由仓库长期管理，请把同一个值加入 `wrangler.toml` 的 `[vars]`；否则每次部署后检查 Dashboard。删除 `ALLOWED_ORIGINS` 即恢复通配来源。
+
+### 改用 Wrangler 部署
+
+在本地部署时，先登录 Wrangler 并创建一次资源：
+
+```bash
+npm ci
 npx wrangler login
 npx wrangler whoami
-```
-
-首次部署时创建 R2 存储桶，然后发布 Worker：
-
-```bash
+npx wrangler d1 create notide
 npx wrangler r2 bucket create notide-notes
-npx wrangler deploy
 ```
 
-Wrangler 会输出服务地址，通常为 `https://notide-sync.<你的子域>.workers.dev`。请保留这个基础地址，Notide 会自动补全 API 路径。
-
-建议为所有公网部署设置足够长的随机令牌。首次部署会先创建 Worker，随后可安全写入 Secret，令牌不会进入 `wrangler.toml` 或 Git：
+把 Wrangler 输出的 D1 ID 写入 `wrangler.toml`，然后执行数据库迁移和部署：
 
 ```bash
-npx wrangler secret put SYNC_TOKEN
+npx wrangler d1 migrations apply notide --remote
+npm run deploy:worker
+npx wrangler secret put SUPER_ADMIN_USERNAME
+npx wrangler secret put SUPER_ADMIN_PASSWORD
+npx wrangler secret put AUTH_PEPPER
+npm run deploy:worker
 ```
 
-只在 Wrangler 的交互提示中输入令牌。如果不设置 `SYNC_TOKEN`，任何知道服务地址的人都能读取、修改或删除笔记。Worker 为跨端客户端开放了跨域请求，因此公网部署必须依靠令牌保护。
-
-部署后验证鉴权和 R2 绑定。启用令牌时，第一个请求应返回 `401`；带正确令牌的健康检查应返回 `storage: "ready"`，新存储桶的笔记列表应为空：
-
-```bash
-curl -i https://notide-sync.<你的子域>.workers.dev/api/health
-curl -H "Authorization: Bearer 你的同步令牌" https://notide-sync.<你的子域>.workers.dev/api/health
-curl -H "Authorization: Bearer 你的同步令牌" https://notide-sync.<你的子域>.workers.dev/api/notes
-```
-
-健康检查响应应类似 `{"ok":true,"service":"notide-sync","version":1,"storage":"ready"}`，最后一个响应应类似 `{"notes":[],"deleted":[],"truncated":false,"cursor":null}`。`401` 表示令牌缺失或错误；`503 storage_unavailable` 表示 R2 绑定或存储桶不可用。浏览器中的网络/CORS 错误通常意味着地址错误、HTTPS 问题，或请求根本没有到达 Worker。遇到其他服务端异常时，可运行 `npx wrangler tail notide-sync` 并同时重现请求。
+只在 Wrangler 的交互提示中输入 Secret。除非同步修改 Worker 源码，否则请保留 `DB` 和 `NOTES_BUCKET` 绑定名。
 
 ### 连接 Notide
 
-对于已经安装的客户端，在“设置”中填写 Worker 基础地址和同一个令牌，先执行“测试连接”，再启用同步。不要附加 `/api/notes`；即使误粘贴，Notide 也会把它规范化为基础地址。如需为本地或原生构建预设同步配置，可将 `.env.example` 复制为已被 Git 忽略的 `.env`，然后填写：
+打开设置，填写不带 `/api/notes` 的 Worker 基础地址并登录。超级管理员可在同一面板创建管理员或普通用户。每个账号有独立的笔记空间；管理员只有在服务端明确允许并选择所有者后，才能管理其他用户的笔记。
+
+如需为本地或原生构建预设地址，把 `.env.example` 复制为被 Git 忽略的 `.env`，只设置端点：
 
 ```dotenv
 VITE_SYNC_ENDPOINT=https://notide-sync.<你的子域>.workers.dev
-VITE_SYNC_TOKEN=你的同步令牌
 ```
 
-`VITE_*` 变量会被写入最终构建产物。不要把包含私有同步令牌的 Web 构建公开发布；公开 Web 版本应在 Notide 设置中由用户自行配置令牌。客户端会在设备上保存设置，拉取远端笔记、上传本地修改、按 `updatedAt` 合并，并保留删除墓碑。旧版 Sail Markdown 本地数据会在首次启动时自动迁移到 `notide-*` 键。
+账号密码和会话令牌均在运行时输入。不要放进 `VITE_*` 变量，因为 Vite 会把它们写入公开的应用构建产物。
 
-如需更换 Worker 名称或 R2 存储桶，请在部署前修改 `wrangler.toml` 中的 `name` 或 `bucket_name`。除非同步修改 Worker 源码，否则应保留绑定名 `NOTES_BUCKET`。
+### 从共享 `SYNC_TOKEN` Worker 升级
 
-### R2 数据迁移
+v0.4 Worker 和客户端不再读取 `SYNC_TOKEN` 或 `VITE_SYNC_TOKEN`。旧令牌不会自动变成用户名、密码或登录会话。请先升级所有客户端，配置三个启动 Secret，以超级管理员登录并创建所需用户，再把旧 R2 对象迁移到一个明确指定的所有者。
 
-`tools/migrate-r2-notes.ps1` 会把旧 `sail-markdown-notes` 存储桶中的对象复制到 `notide-notes`，不会删除源数据。在 Cloudflare 中创建一个对两个存储桶都具有对象读写权限的 R2 API 令牌，并记录 Access Key ID、Secret Access Key 和账户 ID。安装 AWS CLI v2 后，在当前 PowerShell 会话中设置：
+匿名本地笔记会保持在本地，直到用户登录后明确选择是否导入。
+
+### 把旧 R2 笔记迁移到指定账号
+
+迁移分为两个阶段，所有脚本都不会删除源对象。
+
+如果旧 `notes/` 对象仍在 `sail-markdown-notes` 存储桶，先把它们复制到 `notide-notes` 的旧格式前缀。创建一个对源桶有对象读取权限、对目标桶有对象写入权限的 R2 API Token，安装 AWS CLI v2，并先执行 dry run：
 
 ```powershell
 $env:CLOUDFLARE_ACCOUNT_ID = '你的账户ID'
@@ -98,14 +178,47 @@ $env:AWS_DEFAULT_REGION = 'auto'
 .\tools\migrate-r2-notes.ps1 -AccountId $env:CLOUDFLARE_ACCOUNT_ID
 ```
 
-先检查 `-DryRun` 输出，确认无误后再执行正式迁移。迁移结束后清除当前会话中的凭据环境变量。API 仍使用 `/api/notes`；revision、删除墓碑、分页和笔记字段均保持兼容。
+随后获取超级管理员会话，密码不需要写入脚本：
 
-## 原生客户端
+```powershell
+$workerUrl = 'https://notide-sync.<你的子域>.workers.dev'
+$adminUsername = '你的超级管理员用户名'
+$securePassword = Read-Host '超级管理员密码' -AsSecureString
+$credential = [pscredential]::new($adminUsername, $securePassword)
+$loginBody = @{ username = $adminUsername; password = $credential.GetNetworkCredential().Password } | ConvertTo-Json
+$login = Invoke-RestMethod -Method Post -Uri "$workerUrl/api/auth/login" -ContentType 'application/json' -Body $loginBody
+$env:NOTIDE_SESSION_TOKEN = $login.token
+```
 
-`src-tauri` 是 Notide 的 Tauri 2 原生外壳，Windows 和 Android 客户端运行同一份 Vue 前端，并保留离线草稿。
+先运行所有者迁移 dry run。它会通过已鉴权的用户目录解析目标账号，并只读列出 R2 源对象，不会调用迁移接口：
+
+```powershell
+.\tools\migrate-notide-worker-v2.ps1 `
+  -WorkerUrl $workerUrl `
+  -OwnerUsername '目标用户名' `
+  -AccountId $env:CLOUDFLARE_ACCOUNT_ID `
+  -DryRun
+```
+
+确认目标所有者和对象列表后，去掉 `-DryRun` 执行可重复运行的正式迁移：
+
+```powershell
+.\tools\migrate-notide-worker-v2.ps1 -WorkerUrl $workerUrl -OwnerUsername '目标用户名'
+```
+
+也可用 `-OwnerId` 代替 `-OwnerUsername`；两者必须且只能指定一个，不存在默认所有者。目标空间中已有相同笔记 ID 时会跳过。请先在 Notide 中核对目标账号，再手工归档或删除旧对象。
+
+完成后清除临时凭据：
+
+```powershell
+Remove-Item Env:NOTIDE_SESSION_TOKEN, Env:AWS_ACCESS_KEY_ID, Env:AWS_SECRET_ACCESS_KEY -ErrorAction SilentlyContinue
+```
+
+## 原生客户端与发布
+
+`src-tauri` 使用 Tauri 2 将 Vue 应用打包为 Windows 与 Android 客户端。未连接 Cloudflare 时，本地草稿仍可使用。
 
 ```bash
-npx tauri icon public/notide-icon.svg
 npm run native:android:init
 npm run native:dev
 npm run native:build
@@ -113,9 +226,35 @@ npm run native:android
 npm run native:android:release
 ```
 
-Android 构建需要 Android SDK/NDK 和 Rust Android target；Windows 构建需要 WebView2 与 Rust MSVC 工具链。生成的 Android 工程位于 `src-tauri/gen/android`，不会提交到 Git，CI 会在每次构建时重新生成。
+Android 需要 SDK/NDK 与 Rust Android target；Windows 需要 WebView2 和 Rust MSVC 工具链。生成的 `src-tauri/gen/android` 目录不会提交到 Git。
 
-`.github/workflows/build.yml` 包含 Web、Windows 和 Android 三个任务。Windows 安装包以 `notide-windows` artifact 上传，包含 `.msi` 和 `.exe`；Android 会以 `notide-android` 上传可直接安装的 arm64 debug APK。配置发布签名后，可通过 `native:android:release` 生成 release APK/AAB。
+### CI 检查与正式产物
+
+推送到 `main` 会运行 Web、Windows 和 Android 验证。Android debug 构建只用于验证，不会上传为可下载 artifact，也绝不会附加到 GitHub Release。
+
+只有 `v*` 标签会触发 `.github/workflows/release.yml`。发布门禁要求全部签名值齐全，只发布正式签名产物。请成组配置以下 GitHub Actions 仓库 Secrets：
+
+| 平台 | 必需 Secrets |
+| --- | --- |
+| Windows | `WINDOWS_PFX_BASE64`、`WINDOWS_PFX_PASSWORD` |
+| Tauri 更新器 | `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`TAURI_UPDATER_PUBLIC_KEY` |
+| Android | `ANDROID_KEY_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` |
+
+任一值缺失都会使发布失败，不会降级为无签名或 debug 包。发布工作流生成 `notide-windows` 与 `notide-android` artifacts，并向 GitHub Release 附加签名 EXE/MSI、带签名的 Tauri v2 NSIS 更新器（`.exe` 与 `.exe.sig`）、签名 arm64 APK/AAB，以及 `latest.json`。
+
+必须长期保留相同签名密钥与证书。Android 会拒绝由不同密钥签名的升级包，Tauri 更新器也会拒绝与更新公钥不匹配的 Windows 包。
+
+### 更新检查
+
+`src/update.js` 已实现原生更新服务和签名清单契约。Windows 使用官方 Tauri updater；Android 只接受 HTTPS arm64 清单，校验 APK 的 SHA-256 和 30 MiB 上限，再交给系统安装器，由系统检查已安装应用的签名身份。
+
+固定清单地址为：
+
+```text
+https://github.com/abokecn/Notide/releases/latest/download/latest.json
+```
+
+原生客户端会在启动时检查更新，但 24 小时内最多自动检查一次；设置中也提供不受该间隔限制的手动检查。发现新版本后，Notide 会在设置和编辑器顶部显示提示；Windows 通过 Tauri updater 安装，Android 校验 APK 后打开系统安装器。debug APK 不会进入 Release，因此不会被更新流程选中。
 
 ## Notide 语法规范
 

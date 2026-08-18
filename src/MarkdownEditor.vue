@@ -14,6 +14,7 @@ const props = defineProps({
   noteId: { type: String, default: '' },
   placeholder: { type: String, default: '' },
   theme: { type: String, default: 'dark' },
+  lineWrapping: { type: Boolean, default: true },
   ariaLabel: { type: String, default: 'Markdown editor' },
   initialState: { type: Object, default: null },
 })
@@ -25,6 +26,7 @@ let view = null
 let currentNoteId = props.noteId
 let restoring = false
 const themeCompartment = new Compartment()
+const lineWrappingCompartment = new Compartment()
 
 function createEditorTheme(isDark) {
   return EditorView.theme({
@@ -57,7 +59,7 @@ function createEditorTheme(isDark) {
     },
     '.cm-lineNumbers .cm-gutterElement': { minWidth: '32px', padding: '0 10px 0 4px' },
     '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--accent-soft)' },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'rgba(239,112,82,.22) !important' },
+    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--selection) !important' },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
     '.cm-panels': { borderColor: 'var(--line)', backgroundColor: 'var(--paper-deep)', color: 'var(--ink)' },
     '.cm-search': { display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px' },
@@ -119,6 +121,7 @@ function extensions() {
         return false
       },
     }),
+    lineWrappingCompartment.of(props.lineWrapping ? EditorView.lineWrapping : []),
     themeCompartment.of(createEditorTheme(props.theme === 'dark')),
   ]
 }
@@ -214,13 +217,32 @@ watch(() => props.theme, (value) => {
     cached.state = cached.state.update({ effects: themeCompartment.reconfigure(extension) }).state
   }
 })
+watch(() => props.lineWrapping, (value) => {
+  const extension = value ? EditorView.lineWrapping : []
+  if (view) view.dispatch({ effects: lineWrappingCompartment.reconfigure(extension) })
+  for (const cached of stateCache.values()) {
+    cached.state = cached.state.update({ effects: lineWrappingCompartment.reconfigure(extension) }).state
+  }
+})
 
 function focus() { view?.focus() }
 function format(name) { return runMarkdownCommand(view, name) }
 function undoEdit() { return view ? undo(view) : false }
 function redoEdit() { return view ? redo(view) : false }
+function goToLine(lineNumber) {
+  if (!view) return false
+  const number = Math.max(1, Math.min(Math.trunc(Number(lineNumber)) || 1, view.state.doc.lines))
+  const position = view.state.doc.line(number).from
+  view.dispatch({
+    selection: EditorSelection.cursor(position),
+    effects: EditorView.scrollIntoView(position, { y: 'center' }),
+  })
+  view.focus()
+  emitEditorState()
+  return true
+}
 
-defineExpose({ focus, format, undo: undoEdit, redo: redoEdit })
+defineExpose({ focus, format, undo: undoEdit, redo: redoEdit, goToLine })
 </script>
 
 <template>

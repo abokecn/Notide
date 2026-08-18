@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "android-update-capability",
+  "description": "Write a verified APK to Notide's cache and open the system installer.",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": [
+    "fs:allow-write-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "$APPCACHE/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$APPCACHE/**" }]
+    }
+  ]
+}

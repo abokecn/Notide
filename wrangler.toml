@@ -2,8 +2,15 @@ name = "notide-sync"
 main = "workers/index.js"
 compatibility_date = "2026-08-17"
 
-# Keep non-secret runtime bindings in Git. Configure SYNC_TOKEN as an encrypted
-# runtime secret in Cloudflare; Wrangler preserves it across deployments.
+# Create the D1 database before deployment and replace the placeholder ID below.
+# Configure SUPER_ADMIN_USERNAME, SUPER_ADMIN_PASSWORD, and AUTH_PEPPER as
+# encrypted Worker secrets. The Worker fails closed when any value is missing.
+[[d1_databases]]
+binding = "DB"
+database_name = "notide"
+database_id = "REPLACE_WITH_NOTIDE_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
 [[r2_buckets]]
 binding = "NOTES_BUCKET"
   bucket_name = "notide-notes"

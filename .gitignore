@@ -14,3 +14,11 @@ Thumbs.db
 .DS_Store
 src-tauri/target/
 src-tauri/gen/
+release-assets/
+
+# Local signing material must never enter source control.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem

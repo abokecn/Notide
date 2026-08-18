@@ -2,91 +2,171 @@
 
 English | [中文](docs/DEADME_ZH.md)
 
-Notide is a lightweight Vue 3 Markdown notebook with a calm, paper-like workspace. The browser UI and native Windows/Android shells share one codebase, with offline-first editing, the Notide syntax profile, and optional Cloudflare R2 sync.
+Notide is a lightweight Vue 3 Markdown notebook for the browser, Windows, and Android. It combines offline-first editing, the Notide syntax profile, account-scoped Cloudflare sync, and native Tauri 2 installers.
 
 ## Run locally
 
+Node.js 20 or newer is required.
+
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
+## Local Markdown files
+
+Use the file button beside **New note**, or press `Ctrl/Cmd+O`, to open one or more `.md`, `.markdown`, `.mdown`, or `.mkd` files. Notide preserves the source text, adds each file to the current workspace, and applies that workspace's existing offline and sync behavior. Each file may be up to 1 MiB. Use the download button in the editor header to export the current note as Markdown; Android opens the system share sheet when available.
+
 ## Cloudflare sync
 
-The optional Worker in `workers/index.js` stores note JSON in Cloudflare R2. `wrangler.toml` names the service `notide-sync` and binds `NOTES_BUCKET` to the `notide-notes` bucket. The client remains fully usable offline when no endpoint is configured.
+Notide v0.4 uses two Cloudflare storage services:
+
+- D1 stores users, hashed sessions, note indexes, collection versions, audit records, and rate limits.
+- R2 stores versioned note JSON. `NOTES_BUCKET` must point to the `notide-notes` bucket.
+
+The Worker fails closed when D1, R2, database migrations, or any required bootstrap secret is missing. There is no public interval during setup.
 
 ### Deploy from the Cloudflare Dashboard with GitHub
 
-This route needs only a browser. Cloudflare Workers Builds deploys the Worker again whenever the production branch changes:
+#### 1. Create D1 and R2
 
-1. In **R2 Object Storage**, create the `notide-notes` bucket. Create it before the first deployment because `wrangler.toml` refers to this exact name.
-2. In **Workers & Pages**, choose **Create** and **Import a repository**. Authorize GitHub, select this repository, and use `main` as the production branch.
-3. Leave the root directory at the repository root (the blank/default value), leave the build command empty, and use `npx wrangler deploy` as the deploy command. The deploy reads `wrangler.toml` and creates the `NOTES_BUCKET` binding, so do not add a second R2 binding by hand.
-4. Start the first deployment. When it succeeds, open the Worker and copy its `workers.dev` URL.
-5. Open **Settings** > **Variables & Secrets**, add `SYNC_TOKEN` as an encrypted runtime secret, and deploy the resulting version. Do not put it under **Settings** > **Build**: build secrets are not available to requests handled by the running Worker.
+1. In [dash.cloudflare.com](https://dash.cloudflare.com), open **Storage & databases** > **D1 SQL database**, create a database named `notide`, and copy its database ID.
+2. Open **R2 Object Storage**, create a bucket named `notide-notes`.
+3. In `wrangler.toml`, replace `REPLACE_WITH_NOTIDE_D1_DATABASE_ID` with the D1 database ID, then commit and push that change to `main`. A D1 ID is a resource identifier, not an account credential.
 
-The API is unprotected between the first deployment and adding `SYNC_TOKEN`; do not connect Notide or upload notes during that interval. If the dashboard offers build watch paths, limiting them to `workers/**`, `wrangler.toml`, `package.json`, and `package-lock.json` avoids redeploying the Worker for unrelated UI-only commits.
+The committed Wrangler configuration is expected to contain both bindings:
 
-Dashboard settings do not write changes back to GitHub. For this repository, use the following ownership model:
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "notide"
+database_id = "YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
 
-- Git is the source of truth for Worker code, service name, compatibility date, routes, and R2 bindings. A later Git deployment replaces Dashboard code-editor changes, plain runtime variables, and binding changes with the values in `wrangler.toml`. Replacing a binding does not delete objects in either R2 bucket.
-- The Cloudflare Dashboard is the source of truth for the encrypted runtime `SYNC_TOKEN` and Workers Builds settings. Wrangler preserves encrypted secrets across normal deployments unless a secret is explicitly deleted. Plain Dashboard variables are different and may be overwritten unless `keep_vars = true` is deliberately configured.
-- Neither runtime variables, secrets, bindings, nor automatically provisioned resource IDs are silently committed to GitHub. Cloudflare can propose a configuration pull request only when a repository has no Wrangler config; Notide already has one.
+[[r2_buckets]]
+binding = "NOTES_BUCKET"
+bucket_name = "notide-notes"
+```
 
-Do not edit a Git-connected production Worker in the Dashboard code editor as a second deployment workflow. Use either Git deployments or a fully manual Dashboard deployment, not both, or the next push will replace the manual code and binding configuration.
+Do not replace these with Dashboard-only bindings. A later Git deployment reads `wrangler.toml` again.
 
-### Deploy with Wrangler
+#### 2. Connect the repository
 
-This alternative requires Node.js 20 or newer and a local checkout. Authenticate Wrangler and confirm the account it will use:
+In **Workers & Pages**, choose **Create** > **Import a repository**, authorize GitHub, and use these values:
+
+| Field | Value |
+| --- | --- |
+| Repository | `abokecn/Notide` |
+| Production branch | `main` |
+| Root directory | `/` (repository root) |
+| Build command | `npm ci && npm run test:unit && npx wrangler d1 migrations apply notide --remote` |
+| Deploy command | `npm run deploy:worker` |
+
+`wrangler` is pinned to `4.32.0` in `package-lock.json`. Both commands therefore use the repository version rather than an unpinned global installation. The D1 migration command is safe to keep in the build: Wrangler records applied migrations and only applies pending files.
+
+If Workers Builds offers watch paths, include `workers/**`, `migrations/**`, `wrangler.toml`, `package.json`, and `package-lock.json`.
+
+#### 3. Add runtime secrets
+
+After the first Worker version exists, open **Settings** > **Variables & Secrets** and add all three values as encrypted runtime secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `SUPER_ADMIN_USERNAME` | Bootstrap super-admin login name |
+| `SUPER_ADMIN_PASSWORD` | Long, unique bootstrap password |
+| `AUTH_PEPPER` | Random server-only value used for password and session hashing |
+
+Use the runtime section, not **Build** secrets. Build secrets are not available when the deployed Worker handles requests. Redeploy after saving them. Missing values return `503 service_not_configured` instead of exposing the API.
+
+Back up `AUTH_PEPPER` securely before creating regular accounts. Changing it invalidates active sessions and makes existing D1 user password hashes unverifiable; it is not a routine rotation setting.
+
+#### 4. Verify the deployment
+
+The unauthenticated root URL should identify API version 2:
 
 ```bash
+curl https://notide-sync.<your-subdomain>.workers.dev/
+```
+
+Then open Notide Settings, enter the Worker base URL, sign in with the super-admin credentials, and use **Test connection**. A healthy authenticated response contains:
+
+```json
+{"ok":true,"service":"notide-sync","version":2,"storage":"ready","database":"ready"}
+```
+
+Common setup errors are:
+
+- `service_not_configured`: a binding or one of the three runtime secrets is missing.
+- `database_unavailable`: `migrations/0001_notide_v2.sql` was not applied to the bound D1 database.
+- `storage_unavailable`: D1 or the `NOTES_BUCKET` R2 binding cannot be used.
+- `401 unauthorized`: the client has no valid v0.4 login session.
+
+Use `npx wrangler tail notide-sync` from an authenticated local checkout when server logs are needed.
+
+### What Dashboard changes can affect GitHub?
+
+Changing a Dashboard variable, secret, D1 binding, or R2 binding does not edit the GitHub repository. Cloudflare only reads the repository to build and deploy it.
+
+Git remains the source of truth for Worker code and ordinary Wrangler configuration. The next Git deployment can replace Dashboard code-editor changes, plain variables, and binding changes with `wrangler.toml`. Encrypted runtime secrets are retained by normal Wrangler deployments unless explicitly deleted. Binding changes never copy or delete D1/R2 data.
+
+Do not use the Dashboard code editor as a second production workflow for a Git-connected Worker.
+
+### Allowed web origins
+
+With no extra configuration, the Worker returns `Access-Control-Allow-Origin: *` so the hosted web app and native WebViews can use the same API. It does not use cookie authentication; every protected request still needs a bearer session issued by `/api/auth/login`. The wildcard origin does not bypass account authentication.
+
+To restrict browser callers, add the optional plain runtime variable `ALLOWED_ORIGINS` in **Settings** > **Variables & Secrets**. Use a comma- or whitespace-separated list of exact origins without paths or trailing slashes, for example `https://notide.pages.dev,https://notes.example.com`. Native requests without an `Origin` header remain valid. Do not store this value as a Secret because it is not sensitive.
+
+A Dashboard-only ordinary variable does not modify GitHub and may be replaced by a later Git deployment. To keep the restriction under source control, add the same value under `[vars]` in `wrangler.toml`; otherwise verify the Dashboard value after each deployment. Removing `ALLOWED_ORIGINS` restores the wildcard behavior.
+
+### Deploy with Wrangler instead
+
+For a local deployment, authenticate Wrangler and create the resources once:
+
+```bash
+npm ci
 npx wrangler login
 npx wrangler whoami
-```
-
-Create the R2 bucket once, then deploy the Worker from the repository root:
-
-```bash
+npx wrangler d1 create notide
 npx wrangler r2 bucket create notide-notes
-npx wrangler deploy
 ```
 
-Wrangler prints the service URL, normally `https://notide-sync.<your-subdomain>.workers.dev`. Keep that base URL; Notide appends its API paths itself.
-
-Protect the service with a long, random bearer token. The first deploy creates the Worker so the secret can be attached without storing it in `wrangler.toml` or Git:
+Copy the D1 ID printed by Wrangler into `wrangler.toml`, then apply the schema and deploy:
 
 ```bash
-npx wrangler secret put SYNC_TOKEN
+npx wrangler d1 migrations apply notide --remote
+npm run deploy:worker
+npx wrangler secret put SUPER_ADMIN_USERNAME
+npx wrangler secret put SUPER_ADMIN_PASSWORD
+npx wrangler secret put AUTH_PEPPER
+npm run deploy:worker
 ```
 
-Enter the token only at Wrangler's prompt. If `SYNC_TOKEN` is omitted, the API is public and anyone who knows the URL can read, change, or delete notes. The Worker intentionally allows cross-origin requests, so a secret is strongly recommended for every Internet-facing deployment.
-
-Verify both authentication and the R2 binding. A protected deployment should return `401` without the header, report `storage: "ready"` from the authenticated health check, and return an empty collection for a new bucket:
-
-```bash
-curl -i https://notide-sync.<your-subdomain>.workers.dev/api/health
-curl -H "Authorization: Bearer YOUR_SYNC_TOKEN" https://notide-sync.<your-subdomain>.workers.dev/api/health
-curl -H "Authorization: Bearer YOUR_SYNC_TOKEN" https://notide-sync.<your-subdomain>.workers.dev/api/notes
-```
-
-The health response should resemble `{"ok":true,"service":"notide-sync","version":1,"storage":"ready"}` and the final response should resemble `{"notes":[],"deleted":[],"truncated":false,"cursor":null}`. A `401` means the token is missing or incorrect; `503 storage_unavailable` means the R2 binding or bucket is unavailable. A browser network/CORS error usually points to an incorrect URL, HTTPS problem, or a request that never reached the Worker. Use `npx wrangler tail notide-sync` while reproducing unexpected server errors.
+Enter each value only at Wrangler's prompt. Keep the binding names `DB` and `NOTES_BUCKET` unless the Worker source is changed to match.
 
 ### Connect Notide
 
-For an existing installation, open Settings, enter the Worker base URL and the same token, then use **Test connection** before enabling sync. Do not append `/api/notes`; if it is pasted accidentally, Notide normalizes it back to the base URL. For a preconfigured local or native build, copy `.env.example` to the ignored `.env` file and fill in:
+Open Settings, enter the Worker base URL without `/api/notes`, and sign in. The super admin can create admin or user accounts from the same panel. Each account has an isolated note namespace; admins can only access another owner's notes through explicit owner selection permitted by the server.
+
+For a preconfigured local or native build, copy `.env.example` to the ignored `.env` file and set only the endpoint:
 
 ```dotenv
 VITE_SYNC_ENDPOINT=https://notide-sync.<your-subdomain>.workers.dev
-VITE_SYNC_TOKEN=YOUR_SYNC_TOKEN
 ```
 
-`VITE_*` values are embedded in the built application. Do not publish a public web bundle containing a private sync token; configure the token in Notide Settings instead. The client stores that setting on the device, pulls remote notes, uploads local edits, merges by `updatedAt`, and preserves delete tombstones. Existing Sail Markdown local data is migrated to the `notide-*` keys on first launch.
+Credentials and session tokens are entered at runtime. Do not put them in `VITE_*` variables because Vite embeds those values in the public application bundle.
 
-To use another bucket or Worker name, update `bucket_name` or `name` in `wrangler.toml` before deployment. Keep the binding name `NOTES_BUCKET` unless the Worker code is updated to match.
+### Upgrade from the shared `SYNC_TOKEN` Worker
 
-### R2 migration
+`SYNC_TOKEN` and `VITE_SYNC_TOKEN` are not read by the v0.4 Worker or client. An old token does not become a username, password, or login session automatically. Upgrade all clients, configure the three bootstrap secrets, sign in as the super admin, create any required user accounts, and then migrate legacy R2 objects to one explicit owner.
 
-`tools/migrate-r2-notes.ps1` copies objects from the old `sail-markdown-notes` bucket into `notide-notes` without deleting the source. In Cloudflare, create an R2 API token with object read/write access to both buckets and note its Access Key ID, Secret Access Key, and account ID. Install AWS CLI v2, set the credentials for the current PowerShell session, and review the dry run before applying:
+Anonymous local notes remain local until the user chooses whether to import them after signing in.
+
+### Migrate legacy R2 notes to an owner
+
+Migration is intentionally two-stage and never deletes source objects.
+
+If legacy `notes/` objects are still in the old `sail-markdown-notes` bucket, first copy them into the legacy prefix of `notide-notes`. Create an R2 API token with object read access to the source and write access to the destination, install AWS CLI v2, and run the dry run first:
 
 ```powershell
 $env:CLOUDFLARE_ACCOUNT_ID = 'YOUR_ACCOUNT_ID'
@@ -98,14 +178,47 @@ $env:AWS_DEFAULT_REGION = 'auto'
 .\tools\migrate-r2-notes.ps1 -AccountId $env:CLOUDFLARE_ACCOUNT_ID
 ```
 
-Remove the credential environment variables after migration. The API remains `/api/notes`; revisions, tombstones, pagination, and note fields remain compatible.
+Next obtain a super-admin session without placing the password in the script:
 
-## Native clients
+```powershell
+$workerUrl = 'https://notide-sync.<your-subdomain>.workers.dev'
+$adminUsername = 'YOUR_SUPER_ADMIN_USERNAME'
+$securePassword = Read-Host 'Super-admin password' -AsSecureString
+$credential = [pscredential]::new($adminUsername, $securePassword)
+$loginBody = @{ username = $adminUsername; password = $credential.GetNetworkCredential().Password } | ConvertTo-Json
+$login = Invoke-RestMethod -Method Post -Uri "$workerUrl/api/auth/login" -ContentType 'application/json' -Body $loginBody
+$env:NOTIDE_SESSION_TOKEN = $login.token
+```
 
-The `src-tauri` project is a Tauri 2 shell for Windows and Android. The same Vue bundle runs inside the native WebView, while local drafts work offline.
+Run the owner migration dry run. It resolves the target account through the authenticated user directory and performs a read-only R2 listing; it does not call the migration endpoint:
+
+```powershell
+.\tools\migrate-notide-worker-v2.ps1 `
+  -WorkerUrl $workerUrl `
+  -OwnerUsername 'TARGET_USERNAME' `
+  -AccountId $env:CLOUDFLARE_ACCOUNT_ID `
+  -DryRun
+```
+
+After checking the target owner and object list, omit `-DryRun` to perform the idempotent migration:
+
+```powershell
+.\tools\migrate-notide-worker-v2.ps1 -WorkerUrl $workerUrl -OwnerUsername 'TARGET_USERNAME'
+```
+
+`-OwnerId` can be used instead of `-OwnerUsername`; exactly one is required and there is no implicit owner. Existing note IDs in the destination are skipped. Confirm the destination account in Notide before manually archiving or deleting any legacy objects.
+
+Clear temporary credentials when finished:
+
+```powershell
+Remove-Item Env:NOTIDE_SESSION_TOKEN, Env:AWS_ACCESS_KEY_ID, Env:AWS_SECRET_ACCESS_KEY -ErrorAction SilentlyContinue
+```
+
+## Native clients and releases
+
+The `src-tauri` project packages the Vue app with Tauri 2 for Windows and Android. Local drafts remain usable without Cloudflare.
 
 ```bash
-npx tauri icon public/notide-icon.svg
 npm run native:android:init
 npm run native:dev
 npm run native:build
@@ -113,9 +226,35 @@ npm run native:android
 npm run native:android:release
 ```
 
-Android builds require the Android SDK/NDK and Rust Android targets. Windows builds require the WebView2 runtime and the Rust MSVC toolchain. The generated Android project lives under `src-tauri/gen/android` and is intentionally not committed. CI creates it reproducibly before building.
+Android requires the SDK/NDK and Rust Android target. Windows requires WebView2 and the Rust MSVC toolchain. The generated `src-tauri/gen/android` directory is intentionally not committed.
 
-`.github/workflows/build.yml` contains web, Windows, and Android jobs. The Windows job uploads `.msi` and `.exe` installers as `notide-windows`. The Android job uploads an installable debug `.apk` as `notide-android`; `native:android:release` is the release APK/AAB entry point when signing credentials are configured.
+### CI checks and production artifacts
+
+Pushes to `main` run web, Windows, and Android validation. Android debug builds are validation inputs only: they are not uploaded as downloadable artifacts and are never attached to a GitHub Release.
+
+Only a `v*` tag starts `.github/workflows/release.yml`. The release gate requires all signing values and publishes only signed production assets. Configure these GitHub Actions repository secrets together:
+
+| Platform | Required secrets |
+| --- | --- |
+| Windows | `WINDOWS_PFX_BASE64`, `WINDOWS_PFX_PASSWORD` |
+| Tauri updater | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `TAURI_UPDATER_PUBLIC_KEY` |
+| Android | `ANDROID_KEY_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` |
+
+Any missing value fails the release instead of falling back to an unsigned or debug package. The release workflow produces `notide-windows` and `notide-android` artifacts and attaches signed EXE/MSI installers, the signed Tauri v2 NSIS updater (`.exe` and `.exe.sig`), a signed arm64 APK/AAB, and `latest.json` to the GitHub Release.
+
+Keep the signing keys and certificates stable. Android will reject an update signed with a different key, and the Tauri updater rejects Windows packages without a matching updater signature.
+
+### Update checks
+
+The native update service and signed manifest contract are implemented in `src/update.js`. Windows uses the official Tauri updater. Android accepts only the HTTPS arm64 manifest, verifies the APK SHA-256 and 30 MiB limit, then hands it to the system installer, which enforces the installed application's signing identity.
+
+The canonical manifest URL is:
+
+```text
+https://github.com/abokecn/Notide/releases/latest/download/latest.json
+```
+
+The native client checks at startup at most once every 24 hours, and Settings provides a forced manual check. When an update is available, Notide shows it in Settings and the editor top bar; Windows installs through the Tauri updater, while Android verifies the APK and opens the system installer. Debug APKs are deliberately excluded from Releases so they can never be selected as updates.
 
 ## Notide syntax profile
 

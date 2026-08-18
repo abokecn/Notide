@@ -1,9 +1,15 @@
-name: Notide build
+name: Notide checks
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
+
+concurrency:
+  group: notide-checks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   web:
@@ -18,15 +24,9 @@ jobs:
       - run: npm run test:unit
       - run: npm run build
       - name: Enforce web bundle budgets
-        run: >-
-          node tools/check-bundle-size.mjs web dist
-          --max-total-mib 6
-          --max-editor-raw-kib 650
-          --max-editor-gzip-kib 220
-          --max-preview-raw-kib 250
-          --max-preview-gzip-kib 90
+        run: npm run check:size
 
-  windows:
+  windows-check:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,17 +36,10 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
-      - run: npx tauri build
-      - name: Upload Windows installers
-        uses: actions/upload-artifact@v4
-        with:
-          name: notide-windows
-          if-no-files-found: error
-          path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+      - name: Compile Windows application without installers
+        run: npx tauri build --no-bundle -- --locked
 
-  android:
+  android-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,192 +55,28 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+      - name: Install Android toolchain
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
       - name: Export Android NDK path
         run: |
           echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
       - run: npm ci
-      - run: npx tauri android init
-      - name: Install Notide Android icons
-        shell: bash
-        run: cp -R src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
-      - name: Build Android debug APK
-        shell: bash
+      - run: npx tauri android init --ci --skip-targets-install
+      - run: npm run native:android:prepare
+      - name: Compile Android check APK without publishing it
         env:
           NO_COLOR: 1
           CARGO_TERM_COLOR: never
           CARGO_PROFILE_DEV_DEBUG: '0'
           CARGO_PROFILE_DEV_STRIP: symbols
-        run: |
-          set -o pipefail
-          npm run native:android -- --target aarch64 --verbose 2>&1 | tee android-build.log
-      - name: Publish Android failure details
-        if: failure()
+        run: npm run native:android -- --target aarch64 --verbose -- --locked
+      - name: Enforce check APK size
         shell: bash
         run: |
-          if [[ -f android-build.log ]]; then
-            details="$(tail -n 120 android-build.log)"
-          else
-            details="The build stopped before the Android log was created."
-          fi
-          {
-            echo "### Android build failure"
-            echo '```text'
-            printf '%s\n' "$details"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [[ -f android-build.log ]]; then
-            fallback="$(tail -n 45 android-build.log | tail -c 3500)"
-            post_rust="$(awk '/> Task :app:rustBuildArm64Debug/ { capture=1 } capture && /FAILURE: Build failed with an exception/ { exit } capture && NF && length($0) <= 800 && $0 !~ /file or directory .* not found|Could not execute \[report metric|Error \[tauri_cli_node\] failed to build APK|Error failed to build APK|Io\(BeforeSpawn|Cmd\(\[/ { print }' android-build.log | tail -n 160 | tail -c 7000)"
-            gradle="$(awk '/FAILURE: Build failed with an exception/ { capture=1 } capture && length($0) <= 800 { print } capture && /BUILD FAILED/ { exit }' android-build.log | head -c 3500)"
-            filtered="$(awk 'BEGIN { IGNORECASE=1 } /FAILURE:|What went wrong|Execution failed|Caused by:|error:|A problem occurred|Could not|failed to|not found|No such file|Exception|missing|required runtime symbols|failed to validate library|unsupported/ && $0 !~ /not found file or directory|Could not execute \[report metric|Error \[tauri_cli_node\] failed to build APK|Error failed to build APK|Io\(BeforeSpawn|Cmd\(\[/ && length($0) <= 800 { print }' android-build.log | tail -n 80 | tail -c 3500)"
-          else
-            fallback="$details"
-            post_rust=""
-            gradle=""
-            filtered=""
-          fi
-          if [[ -n "$post_rust" ]]; then
-            post_rust="${post_rust//'%'/'%25'}"
-            post_rust="${post_rust//$'\r'/'%0D'}"
-            post_rust="${post_rust//$'\n'/'%0A'}"
-            echo "::error title=Android post-Rust failure::$post_rust"
-          fi
-          if [[ -n "$gradle" ]]; then
-            gradle="${gradle//'%'/'%25'}"
-            gradle="${gradle//$'\r'/'%0D'}"
-            gradle="${gradle//$'\n'/'%0A'}"
-            echo "::error title=Android Gradle failure::$gradle"
-          fi
-          if [[ -n "$filtered" ]]; then
-            filtered="${filtered//'%'/'%25'}"
-            filtered="${filtered//$'\r'/'%0D'}"
-            filtered="${filtered//$'\n'/'%0A'}"
-            echo "::error title=Android matched errors::$filtered"
-          fi
-          if [[ -z "$post_rust$gradle$filtered" ]]; then
-            fallback="${fallback//'%'/'%25'}"
-            fallback="${fallback//$'\r'/'%0D'}"
-            fallback="${fallback//$'\n'/'%0A'}"
-            echo "::error title=Android build failure::$fallback"
-          fi
-      - name: Upload Android build log
-        if: ${{ failure() && hashFiles('android-build.log') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: notide-android-build-log
-          path: android-build.log
-          retention-days: 3
-          if-no-files-found: error
-      - name: Verify Android debug APK
-        shell: bash
-        run: |
-          mapfile -d '' -t debug_apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-debug.apk' -print0)
-          if [[ ${#debug_apks[@]} -ne 1 ]]; then
-            echo "::error::Expected exactly one debug APK, found ${#debug_apks[@]}"
-            printf '%s\n' "${debug_apks[@]}"
+          mapfile -d '' -t apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-debug.apk' -print0)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one Android check APK, found ${#apks[@]}"
             exit 1
           fi
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "${debug_apks[0]}"
-          node tools/check-bundle-size.mjs apk "${debug_apks[0]}" --max-apk-mib 30 --required-abi arm64-v8a
-      - name: Upload Android debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: notide-android
-          if-no-files-found: error
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*-debug.apk
-      - name: Detect Android release signing
-        id: android-release
-        shell: bash
-        env:
-          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          configured=0
-          [[ -n "$ANDROID_KEY_BASE64" ]] && configured=$((configured + 1))
-          [[ -n "$ANDROID_KEY_ALIAS" ]] && configured=$((configured + 1))
-          [[ -n "$ANDROID_KEY_PASSWORD" ]] && configured=$((configured + 1))
-          if [[ $configured -eq 0 ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Android release signing is not configured; release APK/AAB will be skipped."
-          elif [[ $configured -ne 3 ]]; then
-            echo "::error::Android release signing is incomplete. Configure ANDROID_KEY_BASE64, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD together."
-            exit 1
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Configure Android release signing
-        if: ${{ steps.android-release.outputs.enabled == 'true' }}
-        shell: bash
-        env:
-          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          keystore="$RUNNER_TEMP/notide-release.jks"
-          printf '%s' "$ANDROID_KEY_BASE64" | base64 --decode > "$keystore"
-          chmod 600 "$keystore"
-          keytool -list -keystore "$keystore" -storepass "$ANDROID_KEY_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null
-          printf 'keyAlias=%s\npassword=%s\nstoreFile=%s\n' "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" "$keystore" > src-tauri/gen/android/keystore.properties
-          node --input-type=module -e '
-            import fs from "node:fs";
-            const file = "src-tauri/gen/android/app/build.gradle.kts";
-            let source = fs.readFileSync(file, "utf8");
-            const buildTypes = "    buildTypes {";
-            const release = /(\s*getByName\("release"\)\s*\{\r?\n)/;
-            if (!source.includes(buildTypes)) throw new Error("Android buildTypes block not found");
-            if (!release.test(source)) throw new Error("Android release build type not found");
-            const signing = [
-              "    signingConfigs {",
-              "        create(\"release\") {",
-              "            val keystorePropertiesFile = rootProject.file(\"keystore.properties\")",
-              "            val keystoreProperties = java.util.Properties()",
-              "            keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))",
-              "            keyAlias = keystoreProperties[\"keyAlias\"] as String",
-              "            keyPassword = keystoreProperties[\"password\"] as String",
-              "            storeFile = file(keystoreProperties[\"storeFile\"] as String)",
-              "            storePassword = keystoreProperties[\"password\"] as String",
-              "        }",
-              "    }",
-              "",
-              "",
-            ].join("\n");
-            source = source.replace(buildTypes, signing + buildTypes);
-            source = source.replace(release, (match) => match + "            signingConfig = signingConfigs.getByName(\"release\")\n");
-            fs.writeFileSync(file, source);
-          '
-      - name: Build signed Android release APK and AAB
-        if: ${{ steps.android-release.outputs.enabled == 'true' }}
-        shell: bash
-        env:
-          NO_COLOR: 1
-          CARGO_TERM_COLOR: never
-        run: |
-          set -o pipefail
-          npm run native:android:release -- --target aarch64 --verbose 2>&1 | tee android-release-build.log
-      - name: Verify signed Android release bundles
-        if: ${{ steps.android-release.outputs.enabled == 'true' }}
-        shell: bash
-        run: |
-          mapfile -d '' -t release_apks < <(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*-release.apk' -print0)
-          mapfile -d '' -t release_aabs < <(find src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' -print0)
-          if [[ ${#release_apks[@]} -ne 1 || ${#release_aabs[@]} -ne 1 ]]; then
-            echo "::error::Expected one release APK and one AAB; found ${#release_apks[@]} APK and ${#release_aabs[@]} AAB"
-            exit 1
-          fi
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "${release_apks[0]}"
-          aab_verification="$(jarsigner -verify "${release_aabs[0]}" 2>&1)"
-          printf '%s\n' "$aab_verification"
-          grep -q 'jar verified' <<< "$aab_verification"
-          node tools/check-bundle-size.mjs apk "${release_apks[0]}" --max-apk-mib 30 --required-abi arm64-v8a
-      - name: Upload signed Android release bundles
-        if: ${{ steps.android-release.outputs.enabled == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: notide-android-release
-          if-no-files-found: error
-          path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*-release.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          node tools/check-bundle-size.mjs apk "${apks[0]}" --max-apk-mib 30 --required-abi arm64-v8a

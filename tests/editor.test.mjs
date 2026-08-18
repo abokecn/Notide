@@ -1,13 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { indentWithTab } from '@codemirror/commands'
+import { insertNewlineContinueMarkup, markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { markdownCommands } from '../src/editor/markdownCommands.js'
 
-function editor(doc, anchor = 0, head = anchor) {
-  let state = EditorState.create({ doc, selection: EditorSelection.single(anchor, head) })
+function editor(doc, anchor = 0, head = anchor, extensions = []) {
+  let state = EditorState.create({ doc, selection: EditorSelection.single(anchor, head), extensions })
   return {
     get state() { return state },
-    dispatch(spec) { state = state.update(spec).state },
+    dispatch(...specs) {
+      if (specs.length === 1 && specs[0]?.state instanceof EditorState) state = specs[0].state
+      else state = state.update(...specs).state
+    },
     focus() {},
   }
 }
@@ -33,6 +38,40 @@ test('block commands toggle task markers and number selected lines', () => {
   const ordered = editor('first\nsecond', 0, 12)
   markdownCommands.ordered(ordered)
   assert.equal(ordered.state.doc.toString(), '1. first\n2. second')
+})
+
+test('heading command adds and removes a level-two marker', () => {
+  const heading = editor('Heading', 0, 7)
+  markdownCommands.heading(heading)
+  assert.equal(heading.state.doc.toString(), '## Heading')
+  markdownCommands.heading(heading)
+  assert.equal(heading.state.doc.toString(), 'Heading')
+})
+
+test('CodeMirror continues lists and tasks and exits empty list items', () => {
+  const extensions = [markdown({ base: markdownLanguage })]
+  const cases = [
+    ['- item', '- item\n- '],
+    ['- [ ] task', '- [ ] task\n- [ ] '],
+    ['1. item', '1. item\n2. '],
+    ['- ', ''],
+    ['- [ ] ', ''],
+  ]
+
+  for (const [source, expected] of cases) {
+    const view = editor(source, source.length, source.length, extensions)
+    assert.equal(insertNewlineContinueMarkup(view), true)
+    assert.equal(view.state.doc.toString(), expected)
+  }
+})
+
+test('Tab and Shift+Tab indent and outdent the active Markdown list item', () => {
+  const source = '- one\n- two'
+  const view = editor(source, source.length, source.length, [markdown({ base: markdownLanguage })])
+  assert.equal(indentWithTab.run(view), true)
+  assert.equal(view.state.doc.toString(), '- one\n  - two')
+  assert.equal(indentWithTab.shift(view), true)
+  assert.equal(view.state.doc.toString(), source)
 })
 
 test('advanced commands insert valid Notide callout and tab syntax', () => {

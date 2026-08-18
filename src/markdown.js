@@ -149,7 +149,28 @@ export function enhanceMermaid(root) {
       const mermaid = await loadMermaid()
       if (!active || !node.isConnected) return
       const dark = Boolean(root.closest('[data-theme="dark"]'))
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: dark ? { primaryColor: '#3b2925', lineColor: '#e0664a', primaryTextColor: '#eee7e1', secondaryColor: '#282321' } : { primaryColor: '#f1dfd5', lineColor: '#17313a', primaryTextColor: '#1d292c' } })
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'base',
+        themeVariables: dark ? {
+          primaryColor: '#22344A',
+          primaryBorderColor: '#72A9F5',
+          primaryTextColor: '#F2F4F7',
+          secondaryColor: '#24282D',
+          lineColor: '#72A9F5',
+          background: '#1A1C1F',
+          edgeLabelBackground: '#1A1C1F',
+        } : {
+          primaryColor: '#E8F2FF',
+          primaryBorderColor: '#2F63BD',
+          primaryTextColor: '#15344A',
+          secondaryColor: '#F1F3F5',
+          lineColor: '#2F63BD',
+          background: '#FAFBFC',
+          edgeLabelBackground: '#FAFBFC',
+        },
+      })
       const source = node.dataset.mermaid || node.textContent || ''
       const result = await mermaid.render(`notide-mermaid-${Date.now()}-${++mermaidSequence}`, source)
       if (!active || !node.isConnected) return

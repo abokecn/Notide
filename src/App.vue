@@ -1,6 +1,17 @@
 <script setup>
 import { computed, defineAsyncComponent, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { syncWorkspace, testSyncConnection } from './sync.js'
+import { SyncController } from './syncController.js'
+import { createNativeUpdateService } from './update.js'
+import AccountPanel from './AccountPanel.vue'
+import { clearSession, getMe, loadSession, persistSession, workspaceKeys } from './auth.js'
+import {
+  buildImportedMarkdownNote,
+  MARKDOWN_FILE_ACCEPT,
+  markdownDownloadName,
+  validateMarkdownContent,
+  validateMarkdownFile,
+} from './localMarkdown.js'
 
 const MarkdownPreview = defineAsyncComponent(() => import('./MarkdownPreview.vue'))
 const MarkdownEditor = defineAsyncComponent(() => import('./MarkdownEditor.vue'))
@@ -41,6 +52,10 @@ const iconPaths = {
   more: ['M5 12h.01', 'M12 12h.01', 'M19 12h.01'],
   sun: ['M12 4V2', 'M12 22v-2', 'M4.93 4.93L3.5 3.5', 'M20.5 20.5l-1.43-1.43', 'M4 12H2', 'M22 12h-2', 'M4.93 19.07L3.5 20.5', 'M20.5 3.5l-1.43 1.43', 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z'],
   moon: ['M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5z'],
+  users: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M22 21v-2a4 4 0 0 0-3-3.87', 'M16 3.13a4 4 0 0 1 0 7.75'],
+  outline: ['M4 6h2', 'M10 6h10', 'M4 12h2', 'M10 12h10', 'M4 18h2', 'M10 18h10'],
+  upload: ['M12 21V9', 'M7 14l5-5 5 5', 'M5 3h14'],
+  download: ['M12 3v12', 'M7 10l5 5 5-5', 'M5 21h14'],
   dot: ['M12 12h.01'],
 }
 
@@ -56,8 +71,7 @@ const STORAGE_KEY = 'notide-notes-v01'
 const SETTINGS_KEY = 'notide-settings-v01'
 const TOMBSTONE_KEY = 'notide-tombstones-v01'
 const UI_STATE_KEY = 'notide-ui-state-v01'
-const TOKEN_KEY = 'notide-sync-token-v01'
-const SESSION_TOKEN_KEY = 'notide-sync-token-session-v01'
+const SYNC_META_KEY = 'notide-sync-meta-v04'
 const LEGACY_STORAGE_KEY = 'sail-markdown-notes-v01'
 const LEGACY_SETTINGS_KEY = 'sail-markdown-settings-v01'
 const LEGACY_TOMBSTONE_KEY = 'sail-markdown-tombstones-v01'
@@ -110,6 +124,15 @@ const copy = {
     redo: '重做',
     search: '搜索笔记',
     newNote: '新建笔记',
+    openMarkdown: '打开本地 Markdown',
+    exportMarkdown: '导出当前笔记',
+    markdownImported: '已导入 {count} 个 Markdown 文件。',
+    markdownSkipped: '跳过 {count} 个文件：仅支持 Markdown，且单个文件不能超过 1 MiB。',
+    noMarkdownImported: '没有导入文件：请选择不超过 1 MiB 的 Markdown 文件。',
+    markdownExported: '已导出 {name}',
+    markdownShared: '已发送 {name}',
+    markdownExportError: '无法导出当前笔记。',
+    localFilesFolder: '本地文件',
     untitled: '未命名笔记',
     saved: '已保存',
     local: '本地模式',
@@ -154,6 +177,27 @@ const copy = {
     unpin: '取消置顶',
     sortRecent: '最近编辑',
     sortTitle: '按标题',
+    switchDark: '切换为深色主题',
+    switchLight: '切换为浅色主题',
+    outline: '标题大纲',
+    noHeadings: '当前笔记还没有标题',
+    softWrap: '自动换行',
+    owner: '笔记所有者',
+    backToMine: '返回我的笔记',
+    migrationTitle: '选择本地笔记的去向',
+    migrationBody: '此设备上已有匿名笔记。只有你明确选择后，它们才会进入当前账号。',
+    importLocal: '带入当前账号',
+    keepSeparate: '保持分离并读取云端',
+    conflict: '发现同步冲突，本地版本已保留为副本',
+    updates: '应用更新',
+    checkUpdates: '检查更新',
+    checkingUpdates: '正在检查更新',
+    updateCurrent: '当前已是最新版本',
+    updateAvailable: '发现 Notide {version}',
+    installUpdate: '安装更新',
+    installingUpdate: '正在准备安装',
+    updateInstallerOpened: '安装器已打开，请按系统提示继续',
+    updateError: '检查更新失败，请稍后重试',
   },
   en: {
     notes: 'Notes',
@@ -191,6 +235,15 @@ const copy = {
     redo: 'Redo',
     search: 'Search notes',
     newNote: 'New note',
+    openMarkdown: 'Open local Markdown',
+    exportMarkdown: 'Export current note',
+    markdownImported: 'Imported {count} Markdown file(s).',
+    markdownSkipped: 'Skipped {count} file(s): use Markdown files no larger than 1 MiB.',
+    noMarkdownImported: 'Nothing was imported. Choose a Markdown file no larger than 1 MiB.',
+    markdownExported: 'Exported {name}',
+    markdownShared: 'Shared {name}',
+    markdownExportError: 'Could not export the current note.',
+    localFilesFolder: 'Local files',
     untitled: 'Untitled note',
     saved: 'Saved',
     local: 'Local mode',
@@ -235,6 +288,27 @@ const copy = {
     unpin: 'Unpin note',
     sortRecent: 'Recently edited',
     sortTitle: 'By title',
+    switchDark: 'Switch to dark theme',
+    switchLight: 'Switch to light theme',
+    outline: 'Document outline',
+    noHeadings: 'This note has no headings yet',
+    softWrap: 'Wrap long lines',
+    owner: 'Note owner',
+    backToMine: 'Back to my notes',
+    migrationTitle: 'Choose where local notes belong',
+    migrationBody: 'Anonymous notes already exist on this device. They enter this account only after you choose to import them.',
+    importLocal: 'Import into this account',
+    keepSeparate: 'Keep separate and load cloud notes',
+    conflict: 'A sync conflict was found. The local version was kept as a copy.',
+    updates: 'App updates',
+    checkUpdates: 'Check for updates',
+    checkingUpdates: 'Checking for updates',
+    updateCurrent: 'Notide is up to date',
+    updateAvailable: 'Notide {version} is available',
+    installUpdate: 'Install update',
+    installingUpdate: 'Preparing the installer',
+    updateInstallerOpened: 'The system installer is open. Follow its prompts to continue.',
+    updateError: 'Could not check for updates. Try again later.',
   },
 }
 
@@ -242,6 +316,7 @@ const initialSettings = loadSettings()
 const initialUiState = loadUiState()
 const language = ref(initialSettings.language)
 const theme = ref(initialSettings.theme)
+const softWrap = ref(initialSettings.softWrap)
 const viewMode = ref(initialUiState.viewMode || 'split')
 const showSidebar = ref(true)
 const showSettings = ref(false)
@@ -254,7 +329,8 @@ const showMoreTools = ref(false)
 const syncState = ref('idle')
 const syncEndpoint = ref(initialSettings.syncEndpoint)
 const syncDisabled = ref(initialSettings.syncDisabled)
-const syncToken = ref(loadSyncToken(initialSettings.syncToken))
+const restoredSession = safeLoadSession(initialSettings.syncEndpoint)
+const authSession = ref(restoredSession)
 const rememberSyncToken = ref(initialSettings.rememberToken)
 const settingsDraft = ref(createSettingsDraft())
 const connectionState = ref('idle')
@@ -262,6 +338,10 @@ const connectionMessage = ref('')
 const editor = ref(null)
 const tombstones = ref(loadTombstones())
 const showDeleteConfirm = ref(false)
+const showMigrationChoice = ref(false)
+const showOutline = ref(false)
+const pendingSession = ref(null)
+const activeOwner = ref(null)
 const isMobile = ref(typeof window !== 'undefined' && window.innerWidth <= 860)
 const isSavingSettings = ref(false)
 const settingsModal = ref(null)
@@ -274,14 +354,26 @@ const sortTrigger = ref(null)
 const sortMenu = ref(null)
 const moreToolsTrigger = ref(null)
 const moreToolsMenu = ref(null)
+const markdownFileInput = ref(null)
+const fileNotice = ref({ kind: '', text: '' })
 const editorCursor = ref({ line: 1, column: 1, from: 0, to: 0 })
 const editorHistory = ref({ canUndo: false, canRedo: false })
 const editorStates = ref(initialUiState.editorStates || {})
-let syncTimer = null
+const collectionVersion = ref(0)
+const collectionEtag = ref('')
+const nativeClient = isNativeClient()
+const updateState = ref('idle')
+const updateInfo = ref(null)
+let syncController = null
+let syncStateTimer = null
+let updateService = null
+let stopUpdateChecks = null
 let uiStateTimer = null
+let fileNoticeTimer = null
 let connectionController = null
 let settingsReturnFocus = null
 let deleteReturnFocus = null
+let switchingWorkspace = false
 
 const seedNotes = [
   {
@@ -291,7 +383,7 @@ const seedNotes = [
     favorite: true,
     pinned: true,
     updatedAt: Date.now(),
-    content: `# Welcome to Notide\n\nA calm place for notes that stay yours.\n\n## Start here\n\n- Write in plain Markdown\n- Switch between edit, split, and preview\n- Keep working offline, then sync when you are ready\n\n> Your notes are saved locally as you type.\n\n\`Notide v0.2\``,
+    content: `# Welcome to Notide\n\nA calm place for notes that stay yours.\n\n## Start here\n\n- Write in plain Markdown\n- Switch between edit, split, and preview\n- Keep working offline, then sync when you are ready\n\n> Your notes are saved locally as you type.\n\n\`Notide v0.4\``,
   },
   {
     id: 'ideas',
@@ -309,7 +401,7 @@ const seedNotes = [
     favorite: false,
     pinned: false,
     updatedAt: Date.now() - 172_800_000,
-    content: `# Notide roadmap\n\n## v0.2\n\n- [x] Markdown editing\n- [x] Offline persistence\n- [x] Chinese and English UI\n- [x] Cloudflare sync\n\n## Later\n\n- Attachments\n- Note links\n- Version history`,
+    content: `# Notide roadmap\n\n## v0.4\n\n- [x] Markdown editing\n- [x] Offline persistence\n- [x] Chinese and English UI\n- [x] Account-isolated Cloudflare sync\n\n## Later\n\n- Attachments\n- Note links\n- Version history`,
   },
 ]
 
@@ -318,15 +410,34 @@ const selectedId = ref(notes.value.some((note) => note.id === initialUiState.sel
 const activeNote = computed(() => notes.value.find((note) => note.id === selectedId.value) || notes.value[0])
 const t = computed(() => copy[language.value])
 const activeEditorState = computed(() => editorStates.value[selectedId.value] || null)
-const modalOpen = computed(() => showSettings.value || showDeleteConfirm.value)
+const modalOpen = computed(() => showSettings.value || showDeleteConfirm.value || showMigrationChoice.value)
 const drawerOpen = computed(() => isMobile.value && showSidebar.value && !modalOpen.value)
 const settingsBusy = computed(() => connectionState.value === 'testing' || isSavingSettings.value)
 const syncStatusText = computed(() => ({
   syncing: t.value.syncing,
   synced: t.value.synced,
   error: t.value.syncError,
+  conflict: t.value.conflict,
   local: t.value.local,
 }[syncState.value] || t.value.saved))
+const headingOutline = computed(() => {
+  const headings = []
+  for (const [index, line] of String(activeNote.value?.content || '').split('\n').entries()) {
+    const match = /^(#{1,6})\s+(.+?)\s*#*$/.exec(line)
+    if (match) headings.push({ line: index + 1, level: match[1].length, text: match[2].trim() })
+  }
+  return headings
+})
+const managedWorkspace = computed(() => Boolean(authSession.value?.user?.id && activeOwner.value?.id && authSession.value.user.id !== activeOwner.value.id))
+const updateStatusText = computed(() => {
+  if (updateState.value === 'checking') return t.value.checkingUpdates
+  if (updateState.value === 'current') return t.value.updateCurrent
+  if (updateState.value === 'available') return t.value.updateAvailable.replace('{version}', updateInfo.value?.version || '')
+  if (updateState.value === 'installing') return t.value.installingUpdate
+  if (updateState.value === 'installer-opened') return t.value.updateInstallerOpened
+  if (updateState.value === 'error') return t.value.updateError
+  return `Notide v0.4.0`
+})
 
 const visibleNotes = computed(() => {
   let source = [...notes.value]
@@ -382,32 +493,46 @@ const wordCount = computed(() => {
 })
 
 watch([notes, tombstones], ([nextNotes, nextTombstones]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(nextNotes))
-  localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(nextTombstones))
-  if (syncEndpoint.value && syncState.value !== 'syncing') scheduleSync()
+  const keys = currentWorkspaceKeys()
+  localStorage.setItem(keys.notes, JSON.stringify(nextNotes))
+  localStorage.setItem(keys.tombstones, JSON.stringify(nextTombstones))
 }, { deep: true })
-watch([language, theme, syncEndpoint, syncDisabled, rememberSyncToken], ([nextLanguage, nextTheme, nextEndpoint, nextDisabled, nextRemember]) => {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ language: nextLanguage, theme: nextTheme, syncEndpoint: nextEndpoint, syncDisabled: nextDisabled, rememberToken: nextRemember }))
+watch([language, theme, softWrap, syncEndpoint, syncDisabled, rememberSyncToken], ([nextLanguage, nextTheme, nextSoftWrap, nextEndpoint, nextDisabled, nextRemember]) => {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ language: nextLanguage, theme: nextTheme, softWrap: nextSoftWrap, syncEndpoint: nextEndpoint, syncDisabled: nextDisabled, rememberToken: nextRemember }))
 })
 watch([selectedId, viewMode, sortMode, editorStates], scheduleUiStateSave, { deep: true })
 watch(language, (value) => {
   document.documentElement.lang = value === 'zh' ? 'zh-CN' : 'en'
 }, { immediate: true })
 onMounted(() => {
+  syncController = createSyncController()
+  if (nativeClient) {
+    updateService = createNativeUpdateService()
+    stopUpdateChecks = updateService.startScheduledChecks({
+      onResult: handleUpdateResult,
+      onError: () => { updateState.value = 'error' },
+    })
+  }
   updateViewport()
   if (isMobile.value) {
     showSidebar.value = false
     viewMode.value = 'edit'
   }
-  if (syncEndpoint.value) window.setTimeout(syncNote, 350)
+  if (syncEndpoint.value && authSession.value) window.setTimeout(resumeSession, 250)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateViewport)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateViewport)
-  window.clearTimeout(syncTimer)
+  syncController?.dispose()
+  syncController = null
+  stopUpdateChecks?.()
+  stopUpdateChecks = null
+  updateService = null
+  window.clearTimeout(syncStateTimer)
   window.clearTimeout(uiStateTimer)
+  window.clearTimeout(fileNoticeTimer)
   connectionController?.abort()
 })
 
@@ -423,10 +548,6 @@ function loadNotes() {
 function loadSettings() {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')
-    const embeddedToken = String(stored.syncToken || '')
-    if (embeddedToken && !localStorage.getItem(TOKEN_KEY) && !sessionStorage.getItem(SESSION_TOKEN_KEY)) {
-      localStorage.setItem(TOKEN_KEY, embeddedToken)
-    }
     const syncDisabled = stored.syncDisabled === true
     const syncEndpoint = syncDisabled
       ? ''
@@ -434,19 +555,19 @@ function loadSettings() {
     return {
       language: stored.language === 'en' ? 'en' : 'zh',
       theme: stored.theme === 'light' ? 'light' : 'dark',
+      softWrap: stored.softWrap !== false,
       syncEndpoint,
       syncDisabled,
-      rememberToken: typeof stored.rememberToken === 'boolean' ? stored.rememberToken : isNativeClient() || Boolean(localStorage.getItem(TOKEN_KEY)),
-      syncToken: embeddedToken || String(import.meta.env.VITE_SYNC_TOKEN || ''),
+      rememberToken: typeof stored.rememberToken === 'boolean' ? stored.rememberToken : isNativeClient(),
     }
   } catch {
     return {
       language: 'zh',
       theme: 'dark',
+      softWrap: true,
       syncEndpoint: String(import.meta.env.VITE_SYNC_ENDPOINT || '').trim(),
       syncDisabled: false,
       rememberToken: isNativeClient(),
-      syncToken: String(import.meta.env.VITE_SYNC_TOKEN || ''),
     }
   }
 }
@@ -465,26 +586,81 @@ function loadUiState() {
   }
 }
 
-function loadSyncToken(fallback = '') {
-  return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY) || fallback
-}
-
 function isNativeClient() {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
 }
 
-function persistSyncToken(value, remember) {
-  localStorage.removeItem(TOKEN_KEY)
-  sessionStorage.removeItem(SESSION_TOKEN_KEY)
-  if (!value) return
-  if (remember) localStorage.setItem(TOKEN_KEY, value)
-  else sessionStorage.setItem(SESSION_TOKEN_KEY, value)
+function safeLoadSession(endpoint) {
+  if (!endpoint) return null
+  try {
+    return loadSession(endpoint)
+  } catch {
+    return null
+  }
+}
+
+function currentWorkspaceKeys(owner = activeOwner.value) {
+  if (syncEndpoint.value && owner?.id) {
+    try {
+      return workspaceKeys(syncEndpoint.value, owner.id)
+    } catch {
+      // Fall back to the anonymous workspace until the endpoint is valid.
+    }
+  }
+  return { notes: STORAGE_KEY, tombstones: TOMBSTONE_KEY, ui: UI_STATE_KEY, sync: SYNC_META_KEY }
+}
+
+function readStoredArray(key, fallback = []) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || 'null')
+    return Array.isArray(value) ? value : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveCurrentWorkspace() {
+  const keys = currentWorkspaceKeys()
+  localStorage.setItem(keys.notes, JSON.stringify(notes.value))
+  localStorage.setItem(keys.tombstones, JSON.stringify(tombstones.value))
+  localStorage.setItem(keys.ui, JSON.stringify({
+    selectedId: selectedId.value,
+    viewMode: viewMode.value,
+    sortMode: sortMode.value,
+    editorStates: editorStates.value,
+  }))
+  localStorage.setItem(keys.sync, JSON.stringify({
+    collectionVersion: collectionVersion.value,
+    collectionEtag: collectionEtag.value,
+  }))
+}
+
+async function loadWorkspaceFor(owner, { emptyWhenMissing = true } = {}) {
+  const keys = currentWorkspaceKeys(owner)
+  const hasStoredNotes = localStorage.getItem(keys.notes) != null
+  const nextNotes = readStoredArray(keys.notes, emptyWhenMissing ? [] : seedNotes)
+  const nextTombstones = readStoredArray(keys.tombstones, [])
+  let nextUi = {}
+  try { nextUi = JSON.parse(localStorage.getItem(keys.ui) || '{}') } catch { nextUi = {} }
+  let nextSync = {}
+  try { nextSync = JSON.parse(localStorage.getItem(keys.sync) || '{}') } catch { nextSync = {} }
+  switchingWorkspace = true
+  notes.value = nextNotes.map((note) => ({ favorite: false, pinned: false, archived: false, ...note }))
+  tombstones.value = nextTombstones
+  editorStates.value = nextUi.editorStates && typeof nextUi.editorStates === 'object' ? nextUi.editorStates : {}
+  collectionVersion.value = Math.max(0, Number(nextSync.collectionVersion) || 0)
+  collectionEtag.value = String(nextSync.collectionEtag || '')
+  selectedId.value = notes.value.some((note) => note.id === nextUi.selectedId) ? nextUi.selectedId : notes.value[0]?.id || ''
+  viewMode.value = isMobile.value ? 'edit' : ['edit', 'split', 'preview'].includes(nextUi.viewMode) ? nextUi.viewMode : viewMode.value
+  await nextTick()
+  switchingWorkspace = false
+  return hasStoredNotes
 }
 
 function scheduleUiStateSave() {
   window.clearTimeout(uiStateTimer)
   uiStateTimer = window.setTimeout(() => {
-    localStorage.setItem(UI_STATE_KEY, JSON.stringify({
+    localStorage.setItem(currentWorkspaceKeys().ui, JSON.stringify({
       selectedId: selectedId.value,
       viewMode: viewMode.value,
       sortMode: sortMode.value,
@@ -493,14 +669,164 @@ function scheduleUiStateSave() {
   }, 180)
 }
 
+function saveSyncMetadata() {
+  const key = currentWorkspaceKeys().sync
+  localStorage.setItem(key, JSON.stringify({
+    collectionVersion: collectionVersion.value,
+    collectionEtag: collectionEtag.value,
+  }))
+}
+
 function createSettingsDraft() {
   return {
     language: language.value,
     theme: theme.value,
+    softWrap: softWrap.value,
     syncEndpoint: syncEndpoint.value,
-    syncToken: syncToken.value,
     rememberToken: rememberSyncToken.value,
   }
+}
+
+async function activateSession(value, { importLocal = false, owner = value?.user } = {}) {
+  if (!value?.token || !value?.user?.id || !syncEndpoint.value) return
+  syncController?.reset()
+  if (authSession.value) saveCurrentWorkspace()
+  const keys = workspaceKeys(syncEndpoint.value, owner.id)
+  if (importLocal) {
+    localStorage.setItem(keys.notes, JSON.stringify(notes.value))
+    localStorage.setItem(keys.tombstones, JSON.stringify(tombstones.value))
+    localStorage.setItem(keys.ui, JSON.stringify({ selectedId: selectedId.value, viewMode: viewMode.value, sortMode: sortMode.value, editorStates: editorStates.value }))
+    localStorage.setItem(keys.sync, JSON.stringify({ collectionVersion: 0, collectionEtag: '' }))
+  }
+  authSession.value = value
+  rememberSyncToken.value = Boolean(value.remember)
+  activeOwner.value = owner
+  persistSession(syncEndpoint.value, value, Boolean(value.remember))
+  if (!importLocal) await loadWorkspaceFor(owner)
+  else {
+    collectionVersion.value = 0
+    collectionEtag.value = ''
+    syncController?.markDirty('*')
+  }
+  syncState.value = 'idle'
+}
+
+async function handleSessionChange(value) {
+  if (!value) {
+    await leaveAccount()
+    return
+  }
+  const scoped = workspaceKeys(syncEndpoint.value, value.user.id)
+  const hasScopedWorkspace = localStorage.getItem(scoped.notes) != null
+  const hasAnonymousWorkspace = localStorage.getItem(STORAGE_KEY) != null && notes.value.length > 0
+  if (!hasScopedWorkspace && hasAnonymousWorkspace) {
+    pendingSession.value = value
+    showMigrationChoice.value = true
+    return
+  }
+  await activateSession(value)
+  closeSettings()
+  await syncNote({ force: true })
+}
+
+async function finishMigration(importLocal) {
+  const value = pendingSession.value
+  pendingSession.value = null
+  showMigrationChoice.value = false
+  if (!value) return
+  await activateSession(value, { importLocal })
+  closeSettings()
+  await syncNote({ force: true })
+}
+
+async function leaveAccount() {
+  syncController?.reset()
+  if (authSession.value) saveCurrentWorkspace()
+  const endpoint = syncEndpoint.value
+  if (endpoint) clearSession(endpoint)
+  authSession.value = null
+  rememberSyncToken.value = false
+  activeOwner.value = null
+  switchingWorkspace = true
+  notes.value = readStoredArray(STORAGE_KEY, seedNotes).map((note) => ({ favorite: false, pinned: false, archived: false, ...note }))
+  tombstones.value = readStoredArray(TOMBSTONE_KEY, [])
+  collectionVersion.value = 0
+  collectionEtag.value = ''
+  const anonymousUi = loadUiState()
+  editorStates.value = anonymousUi.editorStates || {}
+  selectedId.value = notes.value.some((note) => note.id === anonymousUi.selectedId) ? anonymousUi.selectedId : notes.value[0]?.id || ''
+  await nextTick()
+  switchingWorkspace = false
+  syncState.value = 'idle'
+}
+
+async function resumeSession() {
+  const value = authSession.value
+  if (!value?.token || !syncEndpoint.value) return
+  try {
+    const user = await getMe({ endpoint: syncEndpoint.value, token: value.token })
+    const refreshed = { ...value, user }
+    const scoped = workspaceKeys(syncEndpoint.value, user.id)
+    if (localStorage.getItem(scoped.notes) == null && localStorage.getItem(STORAGE_KEY) != null && notes.value.length) {
+      pendingSession.value = refreshed
+      showMigrationChoice.value = true
+      return
+    }
+    await activateSession(refreshed)
+    await syncNote({ force: true })
+  } catch {
+    await leaveAccount()
+  }
+}
+
+async function manageOwner(user) {
+  if (!user?.id || !authSession.value) return
+  syncController?.reset()
+  saveCurrentWorkspace()
+  activeOwner.value = user
+  await loadWorkspaceFor(user)
+  closeSettings()
+  await syncNote({ force: true })
+}
+
+async function returnToOwnWorkspace() {
+  if (!authSession.value?.user) return
+  await manageOwner(authSession.value.user)
+}
+
+function handleUpdateResult(result) {
+  if (result?.available) {
+    updateInfo.value = result
+    updateState.value = 'available'
+  } else if (result?.status === 'current') {
+    updateInfo.value = null
+    updateState.value = 'current'
+  }
+}
+
+async function checkForUpdates() {
+  if (!updateService || updateState.value === 'checking' || updateState.value === 'installing') return
+  updateState.value = 'checking'
+  try {
+    handleUpdateResult(await updateService.checkForUpdates({ force: true }))
+  } catch {
+    updateState.value = 'error'
+  }
+}
+
+async function installUpdate() {
+  if (!updateInfo.value?.install || updateState.value === 'installing') return
+  updateState.value = 'installing'
+  try {
+    await updateInfo.value.install()
+    updateState.value = 'installer-opened'
+  } catch {
+    updateState.value = 'error'
+  }
+}
+
+function toggleTheme() {
+  theme.value = theme.value === 'light' ? 'dark' : 'light'
 }
 
 function updateViewport() {
@@ -591,7 +917,7 @@ async function testDraftConnection() {
   try {
     const result = await testSyncConnection({
       endpoint: settingsDraft.value.syncEndpoint,
-      token: settingsDraft.value.syncToken,
+      token: authSession.value?.token || '',
       signal: connectionController.signal,
     })
     settingsDraft.value.syncEndpoint = result.endpoint
@@ -612,18 +938,18 @@ async function saveSettingsAndSync() {
   if (settingsBusy.value) return
   isSavingSettings.value = true
   try {
-    if (settingsDraft.value.syncEndpoint.trim() && !await testDraftConnection()) return
     const endpoint = settingsDraft.value.syncEndpoint.trim()
+    const endpointChanged = endpoint !== syncEndpoint.value
+    if (endpoint && authSession.value && !endpointChanged && !await testDraftConnection()) return
 
     language.value = settingsDraft.value.language
     theme.value = settingsDraft.value.theme
+    softWrap.value = settingsDraft.value.softWrap
+    if (endpointChanged && authSession.value) await leaveAccount()
     syncEndpoint.value = endpoint
     syncDisabled.value = !endpoint
-    syncToken.value = settingsDraft.value.syncToken
-    rememberSyncToken.value = settingsDraft.value.rememberToken
-    persistSyncToken(syncToken.value, rememberSyncToken.value)
     closeSettings()
-    if (syncEndpoint.value) await syncNote()
+    if (syncEndpoint.value && authSession.value) await syncNote({ force: true })
     else syncState.value = 'idle'
   } finally {
     isSavingSettings.value = false
@@ -669,8 +995,108 @@ function previewText(content) {
   return String(content || '').replace(/^---[\s\S]*?---\s*/m, '').replace(/[#>*_`\[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 82) || (language.value === 'zh' ? '空白笔记' : 'Empty note')
 }
 
+function createNoteId(prefix = 'note') {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return `${prefix}-${uuid || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`}`
+}
+
+function announceFileNotice(kind, text) {
+  window.clearTimeout(fileNoticeTimer)
+  fileNotice.value = { kind, text }
+  fileNoticeTimer = window.setTimeout(() => {
+    fileNotice.value = { kind: '', text: '' }
+  }, 6000)
+}
+
+function openMarkdownFiles() {
+  markdownFileInput.value?.click()
+}
+
+async function importMarkdownFiles(event) {
+  const input = event.currentTarget
+  const files = Array.from(input?.files || [])
+  if (input) input.value = ''
+  if (!files.length) return
+
+  const imported = []
+  let skipped = 0
+  for (const file of files) {
+    if (validateMarkdownFile(file)) {
+      skipped += 1
+      continue
+    }
+    try {
+      const content = await file.text()
+      if (validateMarkdownContent(content)) {
+        skipped += 1
+        continue
+      }
+      imported.push(buildImportedMarkdownNote({
+        id: createNoteId('local'),
+        fileName: file.name,
+        content,
+        folder: t.value.localFilesFolder,
+        untitled: t.value.untitled,
+      }))
+    } catch {
+      skipped += 1
+    }
+  }
+
+  if (imported.length) {
+    notes.value.unshift(...imported)
+    selectedId.value = imported[0].id
+    activeSection.value = 'all'
+    searchQuery.value = ''
+    viewMode.value = 'edit'
+    for (const note of imported) markNoteDirty(note.id)
+    if (isMobile.value) closeSidebar()
+    nextTick(() => editor.value?.focus())
+  }
+
+  const messages = []
+  if (imported.length) messages.push(t.value.markdownImported.replace('{count}', String(imported.length)))
+  if (skipped) messages.push(t.value.markdownSkipped.replace('{count}', String(skipped)))
+  if (!imported.length) messages.push(t.value.noMarkdownImported)
+  announceFileNotice(imported.length ? (skipped ? 'warning' : 'success') : 'error', messages.join(' '))
+}
+
+async function exportActiveMarkdown() {
+  if (!activeNote.value) return
+  const fileName = markdownDownloadName(activeNote.value.title, t.value.untitled)
+  const blob = new Blob([activeNote.value.content || ''], { type: 'text/markdown;charset=utf-8' })
+
+  if (/Android|iPhone|iPad/i.test(navigator.userAgent) && typeof File !== 'undefined' && navigator.share && navigator.canShare) {
+    const file = new File([blob], fileName, { type: 'text/markdown' })
+    try {
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: activeNote.value.title })
+        announceFileNotice('success', t.value.markdownShared.replace('{name}', fileName))
+        return
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') return
+    }
+  }
+
+  try {
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = fileName
+    anchor.hidden = true
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    announceFileNotice('success', t.value.markdownExported.replace('{name}', fileName))
+  } catch {
+    announceFileNotice('error', t.value.markdownExportError)
+  }
+}
+
 function createNote() {
-  const id = `note-${Date.now()}`
+  const id = createNoteId()
   notes.value.unshift({
     id,
     title: t.value.untitled,
@@ -682,6 +1108,7 @@ function createNote() {
   })
   selectedId.value = id
   viewMode.value = 'edit'
+  markNoteDirty(id)
   nextTick(() => editor.value?.focus())
 }
 
@@ -690,6 +1117,7 @@ function updateNote(field, value) {
   if (activeNote.value[field] === value) return
   activeNote.value[field] = value
   activeNote.value.updatedAt = Date.now()
+  markNoteDirty(activeNote.value.id)
 }
 
 function requestDelete() {
@@ -709,12 +1137,14 @@ function closeDeleteConfirm() {
 
 function deleteNote() {
   if (!activeNote.value || notes.value.length <= 1) return
-  const index = notes.value.findIndex((note) => note.id === activeNote.value.id)
-  tombstones.value = [...tombstones.value.filter((item) => item.id !== activeNote.value.id), { id: activeNote.value.id, deletedAt: Date.now() }]
+  const deletedId = activeNote.value.id
+  const index = notes.value.findIndex((note) => note.id === deletedId)
+  tombstones.value = [...tombstones.value.filter((item) => item.id !== deletedId), { id: deletedId, deletedAt: Date.now(), ...(activeNote.value.revision != null ? { revision: activeNote.value.revision } : {}) }]
   notes.value.splice(index, 1)
   selectedId.value = notes.value[Math.max(0, index - 1)]?.id || notes.value[0].id
   showDeleteConfirm.value = false
   deleteReturnFocus = null
+  markNoteDirty(deletedId)
   nextTick(() => editor.value?.focus())
 }
 
@@ -754,7 +1184,10 @@ function toggleMoreTools() {
 
 function handleKeydown(event) {
   const key = event.key.toLowerCase()
-  if ((event.metaKey || event.ctrlKey) && key === 'k') {
+  if ((event.metaKey || event.ctrlKey) && key === 'o') {
+    event.preventDefault()
+    openMarkdownFiles()
+  } else if ((event.metaKey || event.ctrlKey) && key === 'k') {
     event.preventDefault()
     showSidebar.value = true
     nextTick(() => searchInput.value?.focus())
@@ -762,8 +1195,13 @@ function handleKeydown(event) {
     event.preventDefault()
     createNote()
   } else if (event.key === 'Escape') {
+    if (showMigrationChoice.value) return
     if (showDeleteConfirm.value) return closeDeleteConfirm()
     if (showSettings.value) return closeSettings()
+    if (showOutline.value) {
+      showOutline.value = false
+      return
+    }
     if (showMoreTools.value) {
       showMoreTools.value = false
       return nextTick(() => moreToolsTrigger.value?.focus())
@@ -788,6 +1226,12 @@ function formatMarkdown(name) {
   showMoreTools.value = false
 }
 
+function goToHeading(line) {
+  viewMode.value = 'edit'
+  showOutline.value = false
+  nextTick(() => editor.value?.goToLine?.(line))
+}
+
 function handleCursorChange(value) {
   editorCursor.value = value
 }
@@ -806,34 +1250,69 @@ function handleEditorState(value) {
   }
 }
 
-function scheduleSync() {
-  window.clearTimeout(syncTimer)
-  syncTimer = window.setTimeout(syncNote, 1000)
+function canSync() {
+  return Boolean(syncEndpoint.value.trim() && authSession.value?.token && activeOwner.value?.id)
 }
 
-async function syncNote() {
-  if (syncState.value === 'syncing') return
-  if (!activeNote.value && !notes.value.length) return
-  if (!syncEndpoint.value.trim()) {
+function markNoteDirty(noteId) {
+  if (!switchingWorkspace && canSync()) syncController?.markDirty(noteId)
+}
+
+function createSyncController() {
+  return new SyncController({
+    sync: syncWorkspace,
+    getSnapshot: () => {
+      if (!canSync()) return { endpoint: '', notes: [], tombstones: [] }
+      return {
+        endpoint: syncEndpoint.value,
+        token: authSession.value.token,
+        ownerId: activeOwner.value.id,
+        notes: notes.value.map((note) => ({ ...note })),
+        tombstones: tombstones.value.map((item) => ({ ...item })),
+        collectionVersion: collectionVersion.value,
+        collectionEtag: collectionEtag.value,
+      }
+    },
+    applyResult: (result) => {
+      if (!result || !canSync()) return
+      switchingWorkspace = true
+      if (result.changed) {
+        notes.value = result.notes
+        tombstones.value = result.tombstones
+        if (!notes.value.some((note) => note.id === selectedId.value)) selectedId.value = notes.value[0]?.id || ''
+      }
+      collectionVersion.value = Math.max(0, Number(result.collectionVersion) || 0)
+      collectionEtag.value = String(result.collectionEtag || '')
+      saveSyncMetadata()
+      switchingWorkspace = false
+    },
+    onState: (state) => {
+      if (!canSync()) return
+      window.clearTimeout(syncStateTimer)
+      if (state.status === 'syncing') syncState.value = 'syncing'
+      else if (state.status === 'synced') syncState.value = state.conflicts?.length ? 'conflict' : 'synced'
+      else if (state.status === 'backoff' || state.status === 'paused' || state.status === 'error') syncState.value = 'error'
+      else if (state.status === 'idle') syncState.value = 'idle'
+      if (['synced', 'conflict'].includes(syncState.value)) {
+        syncStateTimer = window.setTimeout(() => {
+          if (syncState.value !== 'syncing') syncState.value = 'idle'
+        }, 2600)
+      }
+    },
+  })
+}
+
+async function syncNote({ force = true } = {}) {
+  if (!canSync()) {
     syncState.value = 'local'
-    window.setTimeout(() => (syncState.value = 'idle'), 1600)
-    return
+    window.clearTimeout(syncStateTimer)
+    syncStateTimer = window.setTimeout(() => (syncState.value = 'idle'), 1600)
+    return null
   }
-  syncState.value = 'syncing'
   try {
-    const result = await syncWorkspace({
-      endpoint: syncEndpoint.value,
-      token: syncToken.value,
-      notes: notes.value,
-      tombstones: tombstones.value,
-    })
-    notes.value = result.notes
-    tombstones.value = result.tombstones
-    syncState.value = 'synced'
+    return await syncController?.trigger('manual', { force })
   } catch {
-    syncState.value = 'error'
-  } finally {
-    window.setTimeout(() => (syncState.value = 'idle'), 2200)
+    return null
   }
 }
 
@@ -844,6 +1323,7 @@ function formatTime(timestamp) {
 
 <template>
   <div class="app-shell" :class="{ 'navigation-hidden': !showSidebar }" :data-theme="theme">
+    <input ref="markdownFileInput" class="local-markdown-input" type="file" :accept="MARKDOWN_FILE_ACCEPT" multiple @change="importMarkdownFiles" />
     <aside class="workspace-nav" :class="{ collapsed: !showSidebar }" :inert="modalOpen">
       <div class="nav-brand">
         <img src="/notide-icon.svg" alt="" aria-hidden="true" class="brand-icon" />
@@ -871,18 +1351,21 @@ function formatTime(timestamp) {
       </nav>
 
       <div class="nav-footer">
-        <button type="button" class="profile-button" :title="t.settings" @click="openSettings"><span class="profile-avatar">N</span><span><strong>Notide workspace</strong><small>{{ syncEndpoint ? t.online : t.local }}</small></span></button>
-        <button type="button" class="nav-settings" :title="t.settings" :aria-label="t.settings" @click="openSettings"><AppIcon name="settings" :size="18" /></button>
+        <button type="button" class="profile-button" :title="t.settings" @click="openSettings"><span class="profile-avatar">{{ (authSession?.user?.username || 'N').slice(0, 1).toUpperCase() }}</span><span><strong>{{ activeOwner?.username || authSession?.user?.username || 'Notide workspace' }}</strong><small>{{ authSession ? (managedWorkspace ? `${t.owner} · ${activeOwner?.username}` : t.online) : t.local }}</small></span></button>
+        <button type="button" class="nav-settings theme-quick-toggle" :title="theme === 'light' ? t.switchDark : t.switchLight" :aria-label="theme === 'light' ? t.switchDark : t.switchLight" @click="toggleTheme"><AppIcon :name="theme === 'light' ? 'moon' : 'sun'" :size="18" /></button>
       </div>
     </aside>
 
     <aside id="notes-panel" class="notes-panel" :class="{ collapsed: !showSidebar }" :inert="modalOpen" :role="drawerOpen ? 'dialog' : undefined" :aria-modal="drawerOpen ? 'true' : undefined" :aria-label="drawerOpen ? t.notes : undefined">
       <header class="notes-panel-header">
         <div><span class="eyebrow">NOTIDE / NOTEBOOK</span><h1>{{ sectionTitle }}</h1></div>
-        <div class="notes-panel-actions"><div class="sort-control"><button ref="sortTrigger" type="button" class="panel-icon-button" :title="t.sort" :aria-label="t.sort" aria-haspopup="true" aria-controls="sort-menu" :aria-expanded="showSortMenu" @click="toggleSortMenu"><AppIcon name="sort" :size="18" /></button><div v-if="showSortMenu" id="sort-menu" ref="sortMenu" class="sort-menu" role="group" :aria-label="t.sort"><button type="button" :class="{ active: sortMode === 'recent' }" :aria-pressed="sortMode === 'recent'" @click="chooseSort('recent')">{{ t.sortRecent }}</button><button type="button" :class="{ active: sortMode === 'title' }" :aria-pressed="sortMode === 'title'" @click="chooseSort('title')">{{ t.sortTitle }}</button></div></div><button type="button" class="panel-icon-button" :title="t.settings" :aria-label="t.settings" @click="openSettings"><AppIcon name="settings" :size="18" /></button><button ref="notesPanelCloseButton" type="button" class="panel-icon-button" :title="t.closeMenu" :aria-label="t.closeMenu" @click="closeSidebar({ restoreFocus: true })"><AppIcon name="close" :size="18" /></button></div>
+        <div class="notes-panel-actions"><div class="sort-control"><button ref="sortTrigger" type="button" class="panel-icon-button" :title="t.sort" :aria-label="t.sort" aria-haspopup="true" aria-controls="sort-menu" :aria-expanded="showSortMenu" @click="toggleSortMenu"><AppIcon name="sort" :size="18" /></button><div v-if="showSortMenu" id="sort-menu" ref="sortMenu" class="sort-menu" role="group" :aria-label="t.sort"><button type="button" :class="{ active: sortMode === 'recent' }" :aria-pressed="sortMode === 'recent'" @click="chooseSort('recent')">{{ t.sortRecent }}</button><button type="button" :class="{ active: sortMode === 'title' }" :aria-pressed="sortMode === 'title'" @click="chooseSort('title')">{{ t.sortTitle }}</button></div></div><button type="button" class="panel-icon-button panel-theme-toggle" :title="theme === 'light' ? t.switchDark : t.switchLight" :aria-label="theme === 'light' ? t.switchDark : t.switchLight" @click="toggleTheme"><AppIcon :name="theme === 'light' ? 'moon' : 'sun'" :size="18" /></button><button type="button" class="panel-icon-button" :title="t.settings" :aria-label="t.settings" @click="openSettings"><AppIcon name="settings" :size="18" /></button><button ref="notesPanelCloseButton" type="button" class="panel-icon-button" :title="t.closeMenu" :aria-label="t.closeMenu" @click="closeSidebar({ restoreFocus: true })"><AppIcon name="close" :size="18" /></button></div>
       </header>
       <div class="notes-search"><AppIcon name="search" :size="17" /><input ref="searchInput" v-model="searchQuery" :placeholder="t.search" :aria-label="t.search" /><kbd>{{ shortcutModifier }} K</kbd></div>
-      <button type="button" class="new-note" @click="createNote"><AppIcon name="plus" :size="19" /><span>{{ t.newNote }}</span><kbd>{{ shortcutModifier }} N</kbd></button>
+      <div class="note-create-actions">
+        <button type="button" class="new-note" @click="createNote"><AppIcon name="plus" :size="19" /><span>{{ t.newNote }}</span><kbd>{{ shortcutModifier }} N</kbd></button>
+        <button type="button" class="open-markdown" :title="`${t.openMarkdown} (${shortcutModifier} O)`" :aria-label="t.openMarkdown" @click="openMarkdownFiles"><AppIcon name="upload" :size="19" /></button>
+      </div>
 
       <div class="notes-list">
         <div class="list-summary"><span>{{ sectionTitle }}</span><span>{{ visibleNotes.length }}</span></div>
@@ -914,37 +1397,49 @@ function formatTime(timestamp) {
         <div class="title-capsule"><input class="document-title" :value="activeNote?.title" :placeholder="t.titlePlaceholder" :aria-label="t.titlePlaceholder" @input="updateNote('title', $event.target.value)" /><button type="button" class="favorite-button" :class="{ starred: activeNote?.favorite }" :title="t.toggleFavorite" :aria-label="t.toggleFavorite" :aria-pressed="Boolean(activeNote?.favorite)" @click="toggleFavorite"><AppIcon name="star" :size="20" /></button><button type="button" class="pin-button" :class="{ pinned: activeNote?.pinned }" :title="activeNote?.pinned ? t.unpin : t.pin" :aria-label="activeNote?.pinned ? t.unpin : t.pin" :aria-pressed="Boolean(activeNote?.pinned)" @click="togglePinned"><AppIcon name="pin" :size="18" /></button></div>
         <div class="topbar-actions">
           <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ syncStatusText }}</span>
-          <span v-if="syncState === 'synced'" class="sync-message">✓ {{ t.synced }}</span><span v-else-if="syncState === 'syncing'" class="sync-message">◌ {{ t.syncing }}</span><span v-else-if="syncState === 'error'" class="sync-message error">× {{ t.syncError }}</span>
+          <button v-if="updateState === 'available'" type="button" class="ghost-button update-prompt" :title="updateStatusText" @click="installUpdate"><AppIcon name="download" :size="16" /><span>{{ updateInfo?.version }}</span></button>
+          <span v-if="syncState === 'synced'" class="sync-message">{{ t.synced }}</span><span v-else-if="syncState === 'syncing'" class="sync-message">{{ t.syncing }}</span><span v-else-if="syncState === 'conflict'" class="sync-message error">{{ t.conflict }}</span><span v-else-if="syncState === 'error'" class="sync-message error">{{ t.syncError }}</span>
+          <button type="button" class="icon-button" :title="t.exportMarkdown" :aria-label="t.exportMarkdown" @click="exportActiveMarkdown"><AppIcon name="download" :size="18" /></button>
           <button type="button" class="icon-button" :title="t.sync" :aria-label="t.sync" :aria-busy="syncState === 'syncing'" :disabled="syncState === 'syncing'" @click="syncNote"><AppIcon name="sync" :size="18" /></button>
           <button type="button" class="icon-button danger-action" :class="{ disabled: notes.length <= 1 }" :title="t.delete" :aria-label="t.delete" :disabled="notes.length <= 1" @click="requestDelete"><AppIcon name="trash" :size="18" /></button>
           <button type="button" class="icon-button" :title="t.focus" :aria-label="t.focus" :aria-pressed="!showSidebar" @click="showSidebar = !showSidebar"><AppIcon name="more" :size="19" /></button>
         </div>
       </header>
 
-      <div class="document-meta"><span>{{ t.today }}</span><span>·</span><span>{{ formatTime(activeNote?.updatedAt || Date.now()) }}</span><span>·</span><span>Markdown</span></div>
+      <div class="document-meta"><span>{{ t.today }}</span><span>·</span><span>{{ formatTime(activeNote?.updatedAt || Date.now()) }}</span><span>·</span><span>Markdown</span><template v-if="managedWorkspace"><span>·</span><span class="owner-badge"><AppIcon name="users" :size="13" />{{ t.owner }}: {{ activeOwner?.username }}<button type="button" @click="returnToOwnWorkspace">{{ t.backToMine }}</button></span></template></div>
 
       <div class="toolbar">
-        <div v-if="viewMode !== 'preview'" class="format-tools" role="toolbar" :aria-label="language === 'zh' ? 'Markdown 工具栏' : 'Markdown toolbar'">
-          <button type="button" class="toolbar-button" :title="t.insertHeading" :aria-label="t.insertHeading" @click="formatMarkdown('heading')"><AppIcon name="notebook" :size="17" /></button>
-          <button type="button" class="toolbar-button" :title="t.insertBold" :aria-label="t.insertBold" @click="formatMarkdown('bold')"><AppIcon name="bold" :size="17" /></button>
-          <button type="button" class="toolbar-button" :title="t.insertTask" :aria-label="t.insertTask" @click="formatMarkdown('task')"><AppIcon name="check" :size="17" /></button>
-          <button type="button" class="toolbar-button" :title="t.insertLink" :aria-label="t.insertLink" @click="formatMarkdown('link')"><AppIcon name="link" :size="17" /></button>
-          <button type="button" class="toolbar-button" :title="t.insertCode" :aria-label="t.insertCode" @click="formatMarkdown('inlineCode')"><AppIcon name="code" :size="17" /></button>
-          <span class="tool-divider"></span>
-          <div class="more-tools-control">
-            <button ref="moreToolsTrigger" type="button" class="toolbar-button" :class="{ active: showMoreTools }" :title="t.moreTools" :aria-label="t.moreTools" aria-haspopup="true" aria-controls="more-tools-menu" :aria-expanded="showMoreTools" @click="toggleMoreTools"><AppIcon name="more" :size="17" /></button>
-            <div v-if="showMoreTools" id="more-tools-menu" ref="moreToolsMenu" class="more-tools-menu" role="group" :aria-label="t.moreTools">
-              <button type="button" @click="formatMarkdown('italic')"><AppIcon name="italic" :size="16" />{{ t.insertItalic }}</button>
-              <button type="button" @click="formatMarkdown('strike')"><AppIcon name="strike" :size="16" />{{ t.insertStrike }}</button>
-              <button type="button" @click="formatMarkdown('bullet')"><AppIcon name="list" :size="16" />{{ t.insertBullet }}</button>
-              <button type="button" @click="formatMarkdown('ordered')"><AppIcon name="ordered" :size="16" />{{ t.insertOrdered }}</button>
-              <button type="button" @click="formatMarkdown('quote')"><AppIcon name="quote" :size="16" />{{ t.insertQuote }}</button>
-              <button type="button" @click="formatMarkdown('image')"><AppIcon name="image" :size="16" />{{ t.insertImage }}</button>
-              <button type="button" @click="formatMarkdown('table')"><AppIcon name="table" :size="16" />{{ t.insertTable }}</button>
-              <button type="button" @click="formatMarkdown('math')"><AppIcon name="math" :size="16" />{{ t.insertMath }}</button>
-              <button type="button" @click="formatMarkdown('codeBlock')"><AppIcon name="code" :size="16" />{{ t.insertCode }}</button>
-              <button type="button" @click="formatMarkdown('callout')"><AppIcon name="quote" :size="16" />{{ t.insertCallout }}</button>
-              <button type="button" @click="formatMarkdown('tabs')"><AppIcon name="split" :size="16" />{{ t.insertTabs }}</button>
+        <div v-if="viewMode !== 'preview'" class="markdown-tools">
+          <div class="format-tools" role="toolbar" :aria-label="language === 'zh' ? 'Markdown 工具栏' : 'Markdown toolbar'">
+            <button type="button" class="toolbar-button" :title="t.insertHeading" :aria-label="t.insertHeading" @click="formatMarkdown('heading')"><AppIcon name="notebook" :size="17" /></button>
+            <button type="button" class="toolbar-button" :title="t.insertBold" :aria-label="t.insertBold" @click="formatMarkdown('bold')"><AppIcon name="bold" :size="17" /></button>
+            <button type="button" class="toolbar-button" :title="t.insertTask" :aria-label="t.insertTask" @click="formatMarkdown('task')"><AppIcon name="check" :size="17" /></button>
+            <button type="button" class="toolbar-button" :title="t.insertLink" :aria-label="t.insertLink" @click="formatMarkdown('link')"><AppIcon name="link" :size="17" /></button>
+            <button type="button" class="toolbar-button" :title="t.insertCode" :aria-label="t.insertCode" @click="formatMarkdown('inlineCode')"><AppIcon name="code" :size="17" /></button>
+            <span class="tool-divider"></span>
+            <div class="more-tools-control">
+              <button ref="moreToolsTrigger" type="button" class="toolbar-button" :class="{ active: showMoreTools }" :title="t.moreTools" :aria-label="t.moreTools" aria-haspopup="true" aria-controls="more-tools-menu" :aria-expanded="showMoreTools" @click="toggleMoreTools"><AppIcon name="more" :size="17" /></button>
+              <div v-if="showMoreTools" id="more-tools-menu" ref="moreToolsMenu" class="more-tools-menu" role="group" :aria-label="t.moreTools">
+                <button type="button" @click="formatMarkdown('italic')"><AppIcon name="italic" :size="16" />{{ t.insertItalic }}</button>
+                <button type="button" @click="formatMarkdown('strike')"><AppIcon name="strike" :size="16" />{{ t.insertStrike }}</button>
+                <button type="button" @click="formatMarkdown('bullet')"><AppIcon name="list" :size="16" />{{ t.insertBullet }}</button>
+                <button type="button" @click="formatMarkdown('ordered')"><AppIcon name="ordered" :size="16" />{{ t.insertOrdered }}</button>
+                <button type="button" @click="formatMarkdown('quote')"><AppIcon name="quote" :size="16" />{{ t.insertQuote }}</button>
+                <button type="button" @click="formatMarkdown('image')"><AppIcon name="image" :size="16" />{{ t.insertImage }}</button>
+                <button type="button" @click="formatMarkdown('table')"><AppIcon name="table" :size="16" />{{ t.insertTable }}</button>
+                <button type="button" @click="formatMarkdown('math')"><AppIcon name="math" :size="16" />{{ t.insertMath }}</button>
+                <button type="button" @click="formatMarkdown('codeBlock')"><AppIcon name="code" :size="16" />{{ t.insertCode }}</button>
+                <button type="button" @click="formatMarkdown('callout')"><AppIcon name="quote" :size="16" />{{ t.insertCallout }}</button>
+                <button type="button" @click="formatMarkdown('tabs')"><AppIcon name="split" :size="16" />{{ t.insertTabs }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="outline-control">
+            <button type="button" class="toolbar-button" :class="{ active: showOutline }" :title="t.outline" :aria-label="t.outline" aria-haspopup="true" aria-controls="document-outline" :aria-expanded="showOutline" @click="showOutline = !showOutline"><AppIcon name="outline" :size="17" /></button>
+            <div v-if="showOutline" id="document-outline" class="outline-menu" role="navigation" :aria-label="t.outline">
+              <strong>{{ t.outline }}</strong>
+              <button v-for="heading in headingOutline" :key="`${heading.line}-${heading.text}`" type="button" :style="{ '--heading-level': heading.level }" @click="goToHeading(heading.line)">{{ heading.text }}</button>
+              <span v-if="!headingOutline.length">{{ t.noHeadings }}</span>
             </div>
           </div>
         </div>
@@ -964,6 +1459,7 @@ function formatTime(timestamp) {
             :initial-state="activeEditorState"
             :placeholder="t.bodyPlaceholder"
             :theme="theme"
+            :line-wrapping="softWrap"
             :aria-label="language === 'zh' ? 'Markdown 编辑器' : 'Markdown editor'"
             @update:model-value="updateNote('content', $event)"
             @cursor-change="handleCursorChange"
@@ -972,13 +1468,13 @@ function formatTime(timestamp) {
           />
         </div>
         <div v-if="viewMode !== 'edit'" class="preview-pane">
-          <div class="preview-label">READING VIEW</div>
+          <div class="preview-label">MARKDOWN / {{ t.preview.toUpperCase() }}</div>
           <MarkdownPreview :source="activeNote?.content || ''" :locale="language" :on-update="(value) => updateNote('content', value)" :on-navigate="navigateWiki" />
         </div>
       </section>
 
       <footer class="statusbar">
-        <div><span class="status-dot" :class="{ online: syncEndpoint }"></span>{{ t.saved }}</div><div class="status-stats"><span>{{ wordCount }} {{ t.words }}</span><span>{{ lineCount }} {{ t.lines }}</span><span>Ln {{ editorCursor.line }}, Col {{ editorCursor.column }}</span><button type="button" class="status-action" :disabled="!editorHistory.canUndo" :title="t.undo" :aria-label="t.undo" @click="undoContent"><AppIcon name="undo" :size="15" /></button><button type="button" class="status-action" :disabled="!editorHistory.canRedo" :title="t.redo" :aria-label="t.redo" @click="redoContent"><AppIcon name="redo" :size="15" /></button></div>
+        <div><span class="status-dot" :class="{ online: authSession }"></span>{{ syncStatusText }}</div><div class="status-stats"><span>{{ wordCount }} {{ t.words }}</span><span>{{ lineCount }} {{ t.lines }}</span><span>Ln {{ editorCursor.line }}, Col {{ editorCursor.column }}</span><button type="button" class="status-action" :disabled="!editorHistory.canUndo" :title="t.undo" :aria-label="t.undo" @click="undoContent"><AppIcon name="undo" :size="15" /></button><button type="button" class="status-action" :disabled="!editorHistory.canRedo" :title="t.redo" :aria-label="t.redo" @click="redoContent"><AppIcon name="redo" :size="15" /></button></div>
       </footer>
     </main>
 
@@ -987,16 +1483,28 @@ function formatTime(timestamp) {
         <div class="modal-header"><div><span class="eyebrow">NOTIDE / PREFERENCES</span><h2 id="settings-title">{{ t.settings }}</h2></div><button type="button" class="icon-button" :title="t.close" :aria-label="t.close" @click="closeSettings"><AppIcon name="close" :size="18" /></button></div>
         <label class="setting-row" for="notide-language"><span>{{ t.language }}</span><select id="notide-language" ref="settingsFirstControl" v-model="settingsDraft.language"><option value="zh">中文</option><option value="en">English</option></select></label>
         <div class="setting-row"><span>{{ t.light }} / {{ t.dark }}</span><button type="button" class="theme-toggle" role="switch" :aria-checked="settingsDraft.theme === 'dark'" :aria-label="settingsDraft.theme === 'light' ? t.dark : t.light" :title="settingsDraft.theme === 'light' ? t.dark : t.light" @click="settingsDraft.theme = settingsDraft.theme === 'light' ? 'dark' : 'light'"><span :class="{ active: settingsDraft.theme === 'light' }"><AppIcon name="sun" :size="15" /></span><span :class="{ active: settingsDraft.theme === 'dark' }"><AppIcon name="moon" :size="15" /></span></button></div>
+        <label class="remember-token"><input v-model="settingsDraft.softWrap" type="checkbox" /><span>{{ t.softWrap }}</span></label>
         <div class="setting-stack">
           <label for="notide-sync-endpoint">{{ t.syncEndpoint }}</label>
           <input id="notide-sync-endpoint" v-model.trim="settingsDraft.syncEndpoint" inputmode="url" autocomplete="url" placeholder="https://notide-sync.example.workers.dev" aria-describedby="sync-endpoint-help sync-connection-result" :aria-invalid="connectionState === 'error' ? 'true' : undefined" />
-          <label for="notide-sync-token">{{ t.syncToken }}</label>
-          <input id="notide-sync-token" v-model="settingsDraft.syncToken" type="password" autocomplete="off" placeholder="SYNC_TOKEN" aria-describedby="sync-endpoint-help sync-connection-result" :aria-invalid="connectionState === 'error' ? 'true' : undefined" />
           <small id="sync-endpoint-help">{{ t.endpointHint }} {{ t.disconnect }}</small>
         </div>
-        <label class="remember-token"><input v-model="settingsDraft.rememberToken" type="checkbox" /><span>{{ t.rememberToken }}</span></label>
         <p id="sync-connection-result" class="connection-result" :class="[connectionState, { empty: !connectionMessage }]" :role="connectionState === 'error' ? 'alert' : 'status'" aria-live="polite">{{ connectionMessage }}</p>
-        <div class="modal-actions"><button type="button" class="ghost-button" @click="closeSettings">{{ t.close }}</button><button type="button" class="ghost-button" :disabled="settingsBusy" @click="testDraftConnection">{{ connectionState === 'testing' ? t.connectionTesting : t.testConnection }}</button><button type="button" class="primary-button" :disabled="settingsBusy" @click="saveSettingsAndSync">{{ isSavingSettings ? t.syncing : t.saveAndSync }}</button></div>
+        <AccountPanel :endpoint="syncEndpoint" :session="authSession" :language="language" :active-owner-id="activeOwner?.id || ''" :remember-by-default="rememberSyncToken" @session-change="handleSessionChange" @manage-owner="manageOwner" />
+        <section v-if="nativeClient" class="setting-stack update-settings" :aria-label="t.updates">
+          <div class="setting-row"><span>{{ t.updates }}</span><div class="update-actions"><button type="button" class="ghost-button" :disabled="updateState === 'checking' || updateState === 'installing'" @click="checkForUpdates">{{ t.checkUpdates }}</button><button v-if="updateState === 'available'" type="button" class="primary-button" @click="installUpdate">{{ t.installUpdate }}</button></div></div>
+          <p class="connection-result" :class="{ error: updateState === 'error' }" :role="updateState === 'error' ? 'alert' : 'status'" aria-live="polite">{{ updateStatusText }}</p>
+          <small v-if="updateInfo?.notes">{{ updateInfo.notes }}</small>
+        </section>
+        <div class="modal-actions"><button type="button" class="ghost-button" @click="closeSettings">{{ t.close }}</button><button type="button" class="ghost-button" :disabled="settingsBusy || !authSession || settingsDraft.syncEndpoint !== syncEndpoint" @click="testDraftConnection">{{ connectionState === 'testing' ? t.connectionTesting : t.testConnection }}</button><button type="button" class="primary-button" :disabled="settingsBusy" @click="saveSettingsAndSync">{{ isSavingSettings ? t.syncing : t.saveAndSync }}</button></div>
+      </section>
+    </div>
+
+    <div v-if="showMigrationChoice" class="modal-backdrop">
+      <section class="settings-modal migration-modal" role="dialog" aria-modal="true" aria-labelledby="migration-title">
+        <div class="modal-header"><div><span class="eyebrow">NOTIDE / ACCOUNT</span><h2 id="migration-title">{{ t.migrationTitle }}</h2></div></div>
+        <p class="migration-copy">{{ t.migrationBody }}</p>
+        <div class="modal-actions"><button type="button" class="ghost-button" @click="finishMigration(false)">{{ t.keepSeparate }}</button><button type="button" class="primary-button" @click="finishMigration(true)">{{ t.importLocal }}</button></div>
       </section>
     </div>
 
@@ -1006,5 +1514,7 @@ function formatTime(timestamp) {
         <div class="modal-actions"><button ref="deleteCancelButton" type="button" class="ghost-button" @click="closeDeleteConfirm">{{ t.cancel }}</button><button type="button" class="primary-button danger-button" @click="deleteNote">{{ t.confirm }}</button></div>
       </section>
     </div>
+
+    <p class="file-notice" :class="fileNotice.kind" :hidden="!fileNotice.text" :role="fileNotice.kind === 'error' ? 'alert' : 'status'" :aria-live="fileNotice.kind === 'error' ? 'assertive' : 'polite'" aria-atomic="true">{{ fileNotice.text }}</p>
   </div>
 </template>
