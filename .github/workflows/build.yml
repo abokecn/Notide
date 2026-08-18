@@ -54,10 +54,32 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
+      - run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+      - name: Export Android NDK path
+        run: |
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13846066" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npx tauri android init
-      - run: npm run native:android
+      - name: Build Android debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run native:android 2>&1 | tee android-build.log
+      - name: Publish Android failure details
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### Android build failure"
+            echo '```text'
+            if [[ -f android-build.log ]]; then
+              tail -n 120 android-build.log
+            else
+              echo "The build stopped before the Android log was created."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Android debug APK
         uses: actions/upload-artifact@v4
         with:
