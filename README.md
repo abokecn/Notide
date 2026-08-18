@@ -11,25 +11,72 @@ npm run dev
 
 ## Cloudflare sync
 
-The optional worker in `workers/index.js` stores note JSON in the `notide-notes` R2 bucket. Deploy it with Wrangler, then set `VITE_SYNC_ENDPOINT` or paste the worker URL in Settings. For a private deployment, set the same bearer token on both sides:
+The optional Worker in `workers/index.js` stores note JSON in Cloudflare R2. `wrangler.toml` names the service `notide-sync` and binds `NOTES_BUCKET` to the `notide-notes` bucket. The client remains fully usable offline when no endpoint is configured.
+
+### Deploy the Worker
+
+Prerequisites are a Cloudflare account with Workers and R2 enabled, Node.js 20 or newer, and a local checkout of this repository. Authenticate Wrangler and confirm the account it will use:
 
 ```bash
+npx wrangler login
+npx wrangler whoami
+```
+
+Create the R2 bucket once, then deploy the Worker from the repository root:
+
+```bash
+npx wrangler r2 bucket create notide-notes
 npx wrangler deploy
+```
+
+Wrangler prints the service URL, normally `https://notide-sync.<your-subdomain>.workers.dev`. Keep that base URL; Notide appends `/api/notes` itself.
+
+Protect the service with a long, random bearer token. The first deploy creates the Worker so the secret can be attached without storing it in `wrangler.toml` or Git:
+
+```bash
 npx wrangler secret put SYNC_TOKEN
 ```
 
-The client pulls remote notes, uploads local edits, merges by `updatedAt`, and keeps delete tombstones. It remains fully usable offline and persists notes in `localStorage` when no endpoint is configured. Existing Sail Markdown local data is migrated to the `notide-*` keys on first launch.
+Enter the token only at Wrangler's prompt. If `SYNC_TOKEN` is omitted, the API is public and anyone who knows the URL can read, change, or delete notes. The Worker intentionally allows cross-origin requests, so a secret is strongly recommended for every Internet-facing deployment.
+
+Verify both authentication and the R2 binding. A protected deployment should return `401` without the header, service metadata at `/`, and an empty collection for a new bucket:
+
+```bash
+curl -i https://notide-sync.<your-subdomain>.workers.dev/api/notes
+curl -H "Authorization: Bearer YOUR_SYNC_TOKEN" https://notide-sync.<your-subdomain>.workers.dev/
+curl -H "Authorization: Bearer YOUR_SYNC_TOKEN" https://notide-sync.<your-subdomain>.workers.dev/api/notes
+```
+
+The final response should resemble `{"notes":[],"deleted":[],"truncated":false,"cursor":null}`. Use `npx wrangler tail notide-sync` while reproducing a request if deployment succeeds but the API returns an unexpected error.
+
+### Connect Notide
+
+For an existing installation, open Settings and enter the Worker base URL and the same token. Do not append `/api/notes`. For a preconfigured local or native build, copy `.env.example` to the ignored `.env` file and fill in:
+
+```dotenv
+VITE_SYNC_ENDPOINT=https://notide-sync.<your-subdomain>.workers.dev
+VITE_SYNC_TOKEN=YOUR_SYNC_TOKEN
+```
+
+`VITE_*` values are embedded in the built application. Do not publish a public web bundle containing a private sync token; configure the token in Notide Settings instead. The client stores that setting on the device, pulls remote notes, uploads local edits, merges by `updatedAt`, and preserves delete tombstones. Existing Sail Markdown local data is migrated to the `notide-*` keys on first launch.
+
+To use another bucket or Worker name, update `bucket_name` or `name` in `wrangler.toml` before deployment. Keep the binding name `NOTES_BUCKET` unless the Worker code is updated to match.
 
 ### R2 migration
 
-`tools/migrate-r2-notes.ps1` copies objects from the old `sail-markdown-notes` bucket into `notide-notes` without deleting the source. Install AWS CLI v2, set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` to an R2 API token that can read and write both buckets, and review the dry run before applying:
+`tools/migrate-r2-notes.ps1` copies objects from the old `sail-markdown-notes` bucket into `notide-notes` without deleting the source. In Cloudflare, create an R2 API token with object read/write access to both buckets and note its Access Key ID, Secret Access Key, and account ID. Install AWS CLI v2, set the credentials for the current PowerShell session, and review the dry run before applying:
 
 ```powershell
+$env:CLOUDFLARE_ACCOUNT_ID = 'YOUR_ACCOUNT_ID'
+$env:AWS_ACCESS_KEY_ID = 'YOUR_R2_ACCESS_KEY_ID'
+$env:AWS_SECRET_ACCESS_KEY = 'YOUR_R2_SECRET_ACCESS_KEY'
+$env:AWS_DEFAULT_REGION = 'auto'
+
 .\tools\migrate-r2-notes.ps1 -AccountId $env:CLOUDFLARE_ACCOUNT_ID -DryRun
 .\tools\migrate-r2-notes.ps1 -AccountId $env:CLOUDFLARE_ACCOUNT_ID
 ```
 
-The API remains `/api/notes`; revisions, tombstones, pagination, and note fields remain compatible.
+Remove the credential environment variables after migration. The API remains `/api/notes`; revisions, tombstones, pagination, and note fields remain compatible.
 
 ## Native clients
 
