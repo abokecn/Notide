@@ -1,0 +1,43 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+
+const root = new URL('..', import.meta.url)
+const read = (path) => fs.readFileSync(new URL(path, root), 'utf8')
+
+test('native clients are configured for Tauri desktop and Android builds', () => {
+  const config = JSON.parse(read('src-tauri/tauri.conf.json'))
+  const packageJson = JSON.parse(read('package.json'))
+  const workflow = read('.github/workflows/build.yml')
+  const cargo = read('src-tauri/Cargo.toml')
+  const app = read('src/App.vue')
+
+  assert.equal(config.productName, 'Notide')
+  assert.equal(config.bundle.active, true)
+  assert.equal(config.identifier, 'com.abokecn.notide')
+  assert.equal(packageJson.name, 'notide')
+  assert.match(cargo, /name = "notide"/)
+  assert.match(cargo, /name = "notide_lib"/)
+  assert.equal(packageJson.scripts['native:android:init'], 'tauri android init')
+  assert.equal(packageJson.scripts['native:android'], 'tauri android build --ci --debug --apk')
+  assert.equal(packageJson.scripts['native:android:release'], 'tauri android build --ci --apk --aab')
+  assert.match(workflow, /npx tauri android init/)
+  assert.match(workflow, /npm run native:android/)
+  assert.match(workflow, /actions\/upload-artifact@v4/)
+  assert.match(workflow, /notide-windows/)
+  assert.match(workflow, /notide-android/)
+  assert.match(workflow, /if-no-files-found: error/g)
+  assert.match(workflow, /outputs\/apk\/\*\*\/\*\.apk/)
+  assert.ok(fs.existsSync(new URL('src-tauri/icons/android/mipmap-mdpi/ic_launcher.png', root)))
+  assert.ok(fs.existsSync(new URL('src-tauri/icons/icon.ico', root)))
+  const icon = read('public/notide-icon.svg')
+  assert.match(icon, /rx="228"/)
+  assert.doesNotMatch(icon, /<text\b/)
+  assert.doesNotMatch(icon, /(?:href|xlink:href)=/)
+  assert.ok(fs.existsSync(new URL('src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png', root)))
+  assert.ok(fs.existsSync(new URL('src-tauri/icons/android/mipmap-mdpi/ic_launcher_background.png', root)))
+  assert.match(app, /const STORAGE_KEY = 'notide-notes-v01'/)
+  assert.match(app, /LEGACY_STORAGE_KEY = 'sail-markdown-notes-v01'/)
+  assert.match(app, /pinned: Boolean|note\.pinned|pinned: false/)
+  assert.match(app, /event\.metaKey \|\| event\.ctrlKey/)
+})

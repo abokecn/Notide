@@ -1,0 +1,15 @@
+{
+  "name": "Notide",
+  "short_name": "Notide",
+  "description": "A calm cross-platform Markdown notebook for notes that stay yours.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#131110",
+  "theme_color": "#0B0D10",
+  "icons": [
+    { "src": "/notide-icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "/icons/192x192.png", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },
+    { "src": "/icons/512x512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+  ],
+  "lang": "zh-CN"
+}

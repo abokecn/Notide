@@ -1,0 +1,7 @@
+{
+  "default": "../public/notide-icon.svg",
+  "bg_color": "#0B0D10",
+  "android_bg": "../public/notide-icon-background.svg",
+  "android_fg": "../public/notide-icon-foreground.svg",
+  "android_fg_scale": 66
+}
