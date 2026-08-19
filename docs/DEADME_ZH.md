@@ -287,6 +287,10 @@ Notide 语法规范是面向结构化笔记与技术写作的 CommonMark 扩展�
 
 预览内容在进入页面前会经过清理，脚本、事件属性、表单和嵌入内容会被阻止。Wiki 链接可跳转到当前笔记库中的目标笔记，任务复选框也会把状态写回 Markdown 源文。
 
+## 开源许可证
+
+Notide 采用 [GNU 通用公共许可证 v3.0（仅此版本）](../LICENSE)（`GPL-3.0-only`）开源。
+
 ## 鸣谢
 
 Notide 的视觉方向与扩展 Markdown 兼容设计参考了 [Inkstone](https://github.com/shuaiplus/inkstone)。Inkstone 采用 [GNU 宽通用公共许可证 v3.0](https://www.gnu.org/licenses/lgpl-3.0.html) 发布。Notide 为独立实现，与 Inkstone 及其维护者不存在隶属、官方合作、赞助或背书关系。

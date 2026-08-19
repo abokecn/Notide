@@ -287,6 +287,10 @@ The Notide syntax profile is a CommonMark-based superset for structured notes an
 
 The preview sanitizes generated HTML and blocks scripts, event attributes, forms, and embeds before it reaches the DOM. Wiki links resolve to notes in the current notebook, and task checkboxes write their state back to the Markdown source.
 
+## License
+
+Notide is licensed under the [GNU General Public License v3.0 only](LICENSE) (`GPL-3.0-only`).
+
 ## Acknowledgements
 
 Notide's visual direction and extended Markdown compatibility were inspired by [Inkstone](https://github.com/shuaiplus/inkstone), which is distributed under the [GNU Lesser General Public License v3.0](https://www.gnu.org/licenses/lgpl-3.0.html). Notide is an independent implementation and is not affiliated with, endorsed by, or sponsored by Inkstone or its maintainers.

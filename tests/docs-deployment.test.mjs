@@ -5,6 +5,22 @@ import fs from 'node:fs'
 const root = new URL('..', import.meta.url)
 const read = (path) => fs.readFileSync(new URL(path, root), 'utf8')
 
+test('project ships the complete GPL-3.0-only license', () => {
+  const license = read('LICENSE')
+  const project = JSON.parse(read('package.json'))
+  const lock = JSON.parse(read('package-lock.json'))
+
+  assert.equal(project.license, 'GPL-3.0-only')
+  assert.equal(lock.packages[''].license, 'GPL-3.0-only')
+  assert.match(read('src-tauri/Cargo.toml'), /^license = "GPL-3\.0-only"$/m)
+  assert.match(license, /GNU GENERAL PUBLIC LICENSE/)
+  assert.match(license, /Version 3, 29 June 2007/)
+  assert.match(license, /END OF TERMS AND CONDITIONS/)
+  assert.ok(license.length > 30_000)
+  assert.match(read('README.md'), /GNU General Public License v3\.0 only/)
+  assert.match(read('docs/DEADME_ZH.md'), /GPL-3\.0-only/)
+})
+
 test('Cloudflare deployment docs describe automatic provisioning and the v0.4 account contract', () => {
   const english = read('README.md')
   const chinese = read('docs/DEADME_ZH.md')
