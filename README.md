@@ -228,6 +228,36 @@ Only a `v*` tag starts `.github/workflows/release.yml`. The release gate require
 | Tauri updater | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `TAURI_UPDATER_PUBLIC_KEY` |
 | Android | `ANDROID_KEY_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` |
 
+#### Prepare the signing secrets
+
+Create and back up the signing material outside the repository before adding the values under **Repository Settings > Secrets and variables > Actions > New repository secret**. Do not use build variables or commit encoded keys: base64 is transport encoding, not encryption.
+
+1. **Windows:** obtain a CA-issued Authenticode code-signing certificate and export its private key as a password-protected `.pfx`. A self-signed certificate is not suitable for a public release and will not satisfy end-user trust. Copy the PFX bytes as base64, paste them into `WINDOWS_PFX_BASE64`, and add its export password as `WINDOWS_PFX_PASSWORD`:
+
+   ```powershell
+   $pfx = (Resolve-Path 'C:\secure\Notide-code-signing.pfx').Path
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx)) | Set-Clipboard
+   ```
+
+2. **Tauri updater:** generate one long-lived updater keypair. The command prompts for a password and creates `notide.key` plus `notide.key.pub`. Add the complete private file as `TAURI_SIGNING_PRIVATE_KEY`, the password as `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the complete public file as `TAURI_UPDATER_PUBLIC_KEY`. Run each `Set-Clipboard` command separately and paste its value before copying the next one:
+
+   ```powershell
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.notide-signing" | Out-Null
+   npx tauri signer generate -w "$env:USERPROFILE\.notide-signing\notide.key"
+   Get-Content -Raw "$env:USERPROFILE\.notide-signing\notide.key" | Set-Clipboard
+   Get-Content -Raw "$env:USERPROFILE\.notide-signing\notide.key.pub" | Set-Clipboard
+   ```
+
+3. **Android:** with JDK 17 or newer, create the one permanent release keystore. Record the alias and passwords in the same offline backup, then add the keystore bytes as `ANDROID_KEY_BASE64`. Add the actual store password, alias, and key password as the other three Android secrets. When PKCS12 uses one password for both entries, set both password secrets to that value:
+
+   ```powershell
+   keytool -genkeypair -v -keystore 'C:\secure\notide-release.jks' -storetype PKCS12 -alias notide -keyalg RSA -keysize 4096 -validity 10000
+   $keystore = (Resolve-Path 'C:\secure\notide-release.jks').Path
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes($keystore)) | Set-Clipboard
+   ```
+
+Keep an offline backup of the PFX, updater private key, Android keystore, aliases, and passwords. GitHub does not allow reading secret values back after saving them. Losing or replacing the Android or updater key prevents existing installations from accepting future updates.
+
 Any missing value fails the release instead of falling back to an unsigned or debug package. The release workflow produces `notide-windows` and `notide-android` artifacts and attaches signed EXE/MSI installers, the signed Tauri v2 NSIS updater (`.exe` and `.exe.sig`), a signed arm64 APK/AAB, and `latest.json` to the GitHub Release.
 
 Keep the signing keys and certificates stable. Android will reject an update signed with a different key, and the Tauri updater rejects Windows packages without a matching updater signature.

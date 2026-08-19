@@ -228,6 +228,36 @@ Android 需要 SDK/NDK 与 Rust Android target；Windows 需要 WebView2 和 Rus
 | Tauri 更新器 | `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`、`TAURI_UPDATER_PUBLIC_KEY` |
 | Android | `ANDROID_KEY_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` |
 
+#### 准备签名 Secrets
+
+请先在仓库之外生成并离线备份签名材料，再前往 **仓库 Settings > Secrets and variables > Actions > New repository secret** 逐项添加。不要使用构建变量，也不要提交编码后的密钥；base64 只是传输编码，不是加密。
+
+1. **Windows：**从可信 CA 获取 Authenticode 代码签名证书，并把私钥导出为带密码的 `.pfx`。自签名证书不适合公开发布，也不能建立终端用户所需的信任。将 PFX 字节转换为 base64 后填入 `WINDOWS_PFX_BASE64`，导出密码填入 `WINDOWS_PFX_PASSWORD`：
+
+   ```powershell
+   $pfx = (Resolve-Path 'C:\secure\Notide-code-signing.pfx').Path
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx)) | Set-Clipboard
+   ```
+
+2. **Tauri 更新器：**生成一组长期使用的 updater 密钥。命令会提示输入密码，并创建 `notide.key` 与 `notide.key.pub`。私钥文件完整内容填入 `TAURI_SIGNING_PRIVATE_KEY`，密码填入 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，公钥文件完整内容填入 `TAURI_UPDATER_PUBLIC_KEY`。请逐条执行 `Set-Clipboard`，每次先粘贴到 GitHub 再复制下一项：
+
+   ```powershell
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.notide-signing" | Out-Null
+   npx tauri signer generate -w "$env:USERPROFILE\.notide-signing\notide.key"
+   Get-Content -Raw "$env:USERPROFILE\.notide-signing\notide.key" | Set-Clipboard
+   Get-Content -Raw "$env:USERPROFILE\.notide-signing\notide.key.pub" | Set-Clipboard
+   ```
+
+3. **Android：**安装 JDK 17 或更高版本后，创建唯一且长期不变的正式 keystore。离线记录 alias 和密码，再把 keystore 字节转换为 base64 填入 `ANDROID_KEY_BASE64`，其余三个 Android Secrets 填入实际的库密码、alias 和密钥密码。若 PKCS12 只使用同一个密码，请让两个密码 Secret 使用该实际值：
+
+   ```powershell
+   keytool -genkeypair -v -keystore 'C:\secure\notide-release.jks' -storetype PKCS12 -alias notide -keyalg RSA -keysize 4096 -validity 10000
+   $keystore = (Resolve-Path 'C:\secure\notide-release.jks').Path
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes($keystore)) | Set-Clipboard
+   ```
+
+请离线备份 PFX、updater 私钥、Android keystore、alias 和全部密码。GitHub 保存 Secret 后不允许再次读取其值；丢失或更换 Android/updater 密钥后，已有安装将无法接受后续更新。
+
 任一值缺失都会使发布失败，不会降级为无签名或 debug 包。发布工作流生成 `notide-windows` 与 `notide-android` artifacts，并向 GitHub Release 附加签名 EXE/MSI、带签名的 Tauri v2 NSIS 更新器（`.exe` 与 `.exe.sig`）、签名 arm64 APK/AAB，以及 `latest.json`。
 
 必须长期保留相同签名密钥与证书。Android 会拒绝由不同密钥签名的升级包，Tauri 更新器也会拒绝与更新公钥不匹配的 Windows 包。

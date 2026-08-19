@@ -84,6 +84,11 @@ test('release docs require every production signing secret and exclude debug rel
     assert.match(document, /https:\/\/github\.com\/kingshot101\/Notide\/releases\/latest\/download\/latest\.json/)
     assert.match(document, /debug[\s\S]*(?:never attached|绝不会附加)/i)
     assert.match(document, /\.exe\.sig/)
+    assert.match(document, /npx tauri signer generate/)
+    assert.match(document, /keytool -genkeypair/)
+    assert.match(document, /Set-Clipboard/)
+    assert.match(document, /Secrets and variables/)
+    assert.match(document, /(?:self-signed|自签名)/i)
     assert.doesNotMatch(document, /NSIS updater archive/)
   }
 })
