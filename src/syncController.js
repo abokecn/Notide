@@ -115,10 +115,9 @@ export class SyncController {
       this.failureCount = 0
     }
     this.clearDirtyTimers()
-    if (this.inFlight) {
-      this.pendingReason = reason
-      return this.inFlight
-    }
+    // Visibility and focus commonly fire together. The active request already
+    // observes the latest clean snapshot; edits are tracked separately by epoch.
+    if (this.inFlight) return this.inFlight
     return this.run(reason)
   }
 

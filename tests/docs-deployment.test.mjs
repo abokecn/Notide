@@ -8,6 +8,7 @@ const read = (path) => fs.readFileSync(new URL(path, root), 'utf8')
 test('Cloudflare deployment docs describe automatic provisioning and the v0.4 account contract', () => {
   const english = read('README.md')
   const chinese = read('docs/DEADME_ZH.md')
+  const wranglerVersion = JSON.parse(read('package.json')).devDependencies.wrangler
   const required = [
     'SUPER_ADMIN_USERNAME',
     'SUPER_ADMIN_PASSWORD',
@@ -27,7 +28,7 @@ test('Cloudflare deployment docs describe automatic provisioning and the v0.4 ac
     assert.match(document, /SYNC_TOKEN[\s\S]*(?:does not become|不会自动变成)/)
     assert.match(document, /ALLOWED_ORIGINS[\s\S]*(?:does not modify GitHub|不会修改 GitHub)/)
     assert.match(document, /(?:automatic resource provisioning|自动资源预配)/i)
-    assert.match(document, /4\.120\.0/)
+    assert.match(document, new RegExp(wranglerVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     assert.match(document, /CREATE \.\.\. IF NOT EXISTS/)
     assert.doesNotMatch(document, /REPLACE_WITH_NOTIDE_D1_DATABASE_ID|database_id\s*=/)
     assert.doesNotMatch(document, /wrangler d1 create notide|wrangler r2 bucket create notide-notes/)
@@ -38,7 +39,7 @@ test('Wrangler uses name-only bindings that can be provisioned without repositor
   const config = read('wrangler.toml')
   const project = JSON.parse(read('package.json'))
 
-  assert.equal(project.devDependencies.wrangler, '4.120.0')
+  assert.equal(project.devDependencies.wrangler, '4.124.0')
   assert.match(config, /binding = "DB"[\s\S]*database_name = "notide"/)
   assert.match(config, /binding = "NOTES_BUCKET"[\s\S]*bucket_name = "notide-notes"/)
   assert.doesNotMatch(config, /database_id|REPLACE_WITH/)

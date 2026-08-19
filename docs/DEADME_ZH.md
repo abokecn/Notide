@@ -59,7 +59,7 @@ Cloudflare 目前仍将自动资源预配标为 Beta。创建出的 D1/R2 是真
 | 构建命令 | `npm ci && npm run test:unit` |
 | 部署命令 | `npm run deploy:worker` |
 
-`wrangler` 已在 `package-lock.json` 固定为 `4.120.0`，Git 部署使用经过测试的仓库版本。`migrations/0001_notide_v2.sql` 仍作为规范的手工迁移与恢复入口保留；Worker 中与它一致的启动 schema 也由测试约束，用于实现首次零配置部署。
+`wrangler` 已在 `package-lock.json` 固定为 `4.124.0`，Git 部署使用经过测试的仓库版本。`migrations/0001_notide_v2.sql` 仍作为规范的手工迁移与恢复入口保留；Worker 中与它一致的启动 schema 也由测试约束，用于实现首次零配置部署。
 
 如果 Workers Builds 提供 watch paths，可加入 `workers/**`、`migrations/**`、`wrangler.toml`、`package.json` 和 `package-lock.json`。
 

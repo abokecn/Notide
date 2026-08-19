@@ -112,6 +112,30 @@ test('SyncController keeps one in-flight request and discards a result from an o
   controller.dispose()
 })
 
+test('foreground events coalesce into the active request without a duplicate follow-up', async () => {
+  const clock = fakeClock()
+  let resolveRequest
+  let calls = 0
+  const controller = new SyncController(controllerOptions(clock, {
+    sync: () => {
+      calls += 1
+      return new Promise((resolve) => { resolveRequest = resolve })
+    },
+  }))
+
+  const first = controller.trigger('visible', { force: false })
+  await Promise.resolve()
+  const focused = controller.trigger('focus', { force: false })
+  assert.equal(first, focused)
+  assert.equal(calls, 1)
+  resolveRequest({ changed: false, notModified: true })
+  await first
+  await flushMicrotasks()
+  assert.equal(calls, 1)
+  assert.equal(clock.pending, 0)
+  controller.dispose()
+})
+
 test('SyncController opens a credential circuit and only a forced manual trigger probes it', async () => {
   const clock = fakeClock()
   let calls = 0

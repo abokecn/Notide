@@ -59,7 +59,7 @@ In **Workers & Pages**, choose **Create** > **Import a repository**, authorize G
 | Build command | `npm ci && npm run test:unit` |
 | Deploy command | `npm run deploy:worker` |
 
-`wrangler` is pinned to `4.120.0` in `package-lock.json`, so Git deployments use the tested repository version. `migrations/0001_notide_v2.sql` remains available as the canonical manual migration and recovery entry point, while the Worker keeps its matching bootstrap schema under test for zero-touch first deployment.
+`wrangler` is pinned to `4.124.0` in `package-lock.json`, so Git deployments use the tested repository version. `migrations/0001_notide_v2.sql` remains available as the canonical manual migration and recovery entry point, while the Worker keeps its matching bootstrap schema under test for zero-touch first deployment.
 
 If Workers Builds offers watch paths, include `workers/**`, `migrations/**`, `wrangler.toml`, `package.json`, and `package-lock.json`.
 

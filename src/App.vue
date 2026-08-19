@@ -54,6 +54,7 @@ const iconPaths = {
   moon: ['M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5z'],
   users: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M22 21v-2a4 4 0 0 0-3-3.87', 'M16 3.13a4 4 0 0 1 0 7.75'],
   outline: ['M4 6h2', 'M10 6h10', 'M4 12h2', 'M10 12h10', 'M4 18h2', 'M10 18h10'],
+  focus: ['M9 4H4v5', 'M15 4h5v5', 'M9 20H4v-5', 'M15 20h5v-5'],
   upload: ['M12 21V9', 'M7 14l5-5 5 5', 'M5 3h14'],
   download: ['M12 3v12', 'M7 10l5 5 5-5', 'M5 21h14'],
   dot: ['M12 12h.01'],
@@ -198,6 +199,7 @@ const copy = {
     installingUpdate: '正在准备安装',
     updateInstallerOpened: '安装器已打开，请按系统提示继续',
     updateError: '检查更新失败，请稍后重试',
+    skipEditor: '跳到 Markdown 编辑器',
   },
   en: {
     notes: 'Notes',
@@ -309,6 +311,7 @@ const copy = {
     installingUpdate: 'Preparing the installer',
     updateInstallerOpened: 'The system installer is open. Follow its prompts to continue.',
     updateError: 'Could not check for updates. Try again later.',
+    skipEditor: 'Skip to Markdown editor',
   },
 }
 
@@ -348,6 +351,8 @@ const settingsModal = ref(null)
 const settingsFirstControl = ref(null)
 const deleteModal = ref(null)
 const deleteCancelButton = ref(null)
+const migrationModal = ref(null)
+const migrationFirstButton = ref(null)
 const mobileMenuButton = ref(null)
 const notesPanelCloseButton = ref(null)
 const sortTrigger = ref(null)
@@ -720,13 +725,19 @@ async function handleSessionChange(value) {
   const hasScopedWorkspace = localStorage.getItem(scoped.notes) != null
   const hasAnonymousWorkspace = localStorage.getItem(STORAGE_KEY) != null && notes.value.length > 0
   if (!hasScopedWorkspace && hasAnonymousWorkspace) {
-    pendingSession.value = value
-    showMigrationChoice.value = true
+    openMigrationChoice(value)
     return
   }
   await activateSession(value)
   closeSettings()
   await syncNote({ force: true })
+}
+
+function openMigrationChoice(value) {
+  pendingSession.value = value
+  showSettings.value = false
+  showMigrationChoice.value = true
+  nextTick(() => migrationFirstButton.value?.focus())
 }
 
 async function finishMigration(importLocal) {
@@ -735,8 +746,9 @@ async function finishMigration(importLocal) {
   showMigrationChoice.value = false
   if (!value) return
   await activateSession(value, { importLocal })
-  closeSettings()
+  settingsReturnFocus = null
   await syncNote({ force: true })
+  nextTick(() => editor.value?.focus())
 }
 
 async function leaveAccount() {
@@ -768,8 +780,7 @@ async function resumeSession() {
     const refreshed = { ...value, user }
     const scoped = workspaceKeys(syncEndpoint.value, user.id)
     if (localStorage.getItem(scoped.notes) == null && localStorage.getItem(STORAGE_KEY) != null && notes.value.length) {
-      pendingSession.value = refreshed
-      showMigrationChoice.value = true
+      openMigrationChoice(refreshed)
       return
     }
     await activateSession(refreshed)
@@ -1323,6 +1334,7 @@ function formatTime(timestamp) {
 
 <template>
   <div class="app-shell" :class="{ 'navigation-hidden': !showSidebar }" :data-theme="theme">
+    <a class="skip-link" href="#notide-editor">{{ t.skipEditor }}</a>
     <input ref="markdownFileInput" class="local-markdown-input" type="file" :accept="MARKDOWN_FILE_ACCEPT" multiple @change="importMarkdownFiles" />
     <aside class="workspace-nav" :class="{ collapsed: !showSidebar }" :inert="modalOpen">
       <div class="nav-brand">
@@ -1391,7 +1403,7 @@ function formatTime(timestamp) {
 
     <div v-if="drawerOpen" class="drawer-scrim" aria-hidden="true" @click="closeSidebar({ restoreFocus: true })"></div>
 
-    <main class="workspace" :inert="modalOpen || drawerOpen">
+    <main id="notide-editor" class="workspace" tabindex="-1" :inert="modalOpen || drawerOpen">
       <header class="editor-topbar">
         <div class="editor-context"><button ref="mobileMenuButton" type="button" class="mobile-menu" :title="t.openMenu" :aria-label="t.openMenu" aria-controls="notes-panel" :aria-expanded="drawerOpen" @click="openSidebar"><AppIcon name="menu" :size="19" /></button><span>Notide</span><span>/</span></div>
         <div class="title-capsule"><input class="document-title" :value="activeNote?.title" :placeholder="t.titlePlaceholder" :aria-label="t.titlePlaceholder" @input="updateNote('title', $event.target.value)" /><button type="button" class="favorite-button" :class="{ starred: activeNote?.favorite }" :title="t.toggleFavorite" :aria-label="t.toggleFavorite" :aria-pressed="Boolean(activeNote?.favorite)" @click="toggleFavorite"><AppIcon name="star" :size="20" /></button><button type="button" class="pin-button" :class="{ pinned: activeNote?.pinned }" :title="activeNote?.pinned ? t.unpin : t.pin" :aria-label="activeNote?.pinned ? t.unpin : t.pin" :aria-pressed="Boolean(activeNote?.pinned)" @click="togglePinned"><AppIcon name="pin" :size="18" /></button></div>
@@ -1402,7 +1414,7 @@ function formatTime(timestamp) {
           <button type="button" class="icon-button" :title="t.exportMarkdown" :aria-label="t.exportMarkdown" @click="exportActiveMarkdown"><AppIcon name="download" :size="18" /></button>
           <button type="button" class="icon-button" :title="t.sync" :aria-label="t.sync" :aria-busy="syncState === 'syncing'" :disabled="syncState === 'syncing'" @click="syncNote"><AppIcon name="sync" :size="18" /></button>
           <button type="button" class="icon-button danger-action" :class="{ disabled: notes.length <= 1 }" :title="t.delete" :aria-label="t.delete" :disabled="notes.length <= 1" @click="requestDelete"><AppIcon name="trash" :size="18" /></button>
-          <button type="button" class="icon-button" :title="t.focus" :aria-label="t.focus" :aria-pressed="!showSidebar" @click="showSidebar = !showSidebar"><AppIcon name="more" :size="19" /></button>
+          <button type="button" class="icon-button" :title="t.focus" :aria-label="t.focus" :aria-pressed="!showSidebar" @click="showSidebar = !showSidebar"><AppIcon name="focus" :size="19" /></button>
         </div>
       </header>
 
@@ -1501,10 +1513,10 @@ function formatTime(timestamp) {
     </div>
 
     <div v-if="showMigrationChoice" class="modal-backdrop">
-      <section class="settings-modal migration-modal" role="dialog" aria-modal="true" aria-labelledby="migration-title">
+      <section ref="migrationModal" class="settings-modal migration-modal" role="dialog" aria-modal="true" aria-labelledby="migration-title" @keydown.tab="trapModalFocus($event, migrationModal)">
         <div class="modal-header"><div><span class="eyebrow">NOTIDE / ACCOUNT</span><h2 id="migration-title">{{ t.migrationTitle }}</h2></div></div>
         <p class="migration-copy">{{ t.migrationBody }}</p>
-        <div class="modal-actions"><button type="button" class="ghost-button" @click="finishMigration(false)">{{ t.keepSeparate }}</button><button type="button" class="primary-button" @click="finishMigration(true)">{{ t.importLocal }}</button></div>
+        <div class="modal-actions"><button ref="migrationFirstButton" type="button" class="ghost-button" @click="finishMigration(false)">{{ t.keepSeparate }}</button><button type="button" class="primary-button" @click="finishMigration(true)">{{ t.importLocal }}</button></div>
       </section>
     </div>
 
