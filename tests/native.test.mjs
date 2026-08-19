@@ -61,6 +61,29 @@ test('main workflow compiles but never uploads a debug package', () => {
   assert.doesNotMatch(source, /actions\/upload-artifact/)
 })
 
+test('project and GitHub Actions use the Node 24 generation', () => {
+  const project = JSON.parse(read('package.json'))
+  const workflows = `${read('.github/workflows/build.yml')}\n${read('.github/workflows/release.yml')}`
+
+  assert.equal(project.engines.node, '>=24')
+  assert.equal(read('.nvmrc').trim(), '24')
+  assert.match(workflows, /node-version: 24/g)
+  for (const action of [
+    'actions/checkout@v7',
+    'actions/setup-node@v7',
+    'actions/setup-java@v5',
+    'android-actions/setup-android@v4',
+    'actions/upload-artifact@v7',
+    'actions/download-artifact@v8',
+  ]) {
+    assert.match(workflows, new RegExp(action.replace('/', '\\/')))
+  }
+  assert.doesNotMatch(
+    workflows,
+    /actions\/(?:checkout|setup-node|setup-java|upload-artifact|download-artifact)@v4|android-actions\/setup-android@v3/,
+  )
+})
+
 test('tag workflow fails closed and publishes only verified signed artifacts', () => {
   const source = read('.github/workflows/release.yml')
   const workflow = parseWorkflow('.github/workflows/release.yml')

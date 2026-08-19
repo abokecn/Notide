@@ -6,7 +6,7 @@ Notide is a lightweight Vue 3 Markdown notebook for the browser, Windows, and An
 
 ## Run locally
 
-Node.js 20 or newer is required.
+Node.js 24 or newer is required. GitHub Actions also run on the Node 24 generation of the official actions.
 
 ```bash
 npm ci

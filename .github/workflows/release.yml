@@ -18,10 +18,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -65,8 +65,8 @@ jobs:
     needs: release-gate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -130,7 +130,7 @@ jobs:
           Copy-Item $updaterSignature.FullName "release-assets/$prefix-setup.exe.sig"
           Set-Content release-assets/windows-cert-sha256.txt $certificateSha256 -NoNewline
       - name: Upload signed Windows release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: notide-windows
           if-no-files-found: error
@@ -140,19 +140,19 @@ jobs:
     needs: release-gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Install Android toolchain
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
       - name: Export Android NDK path
@@ -218,7 +218,7 @@ jobs:
           cp "${aabs[0]}" "release-assets/Notide_${NOTIDE_VERSION}_arm64.aab"
           printf '%s' "$certificate_sha256" > release-assets/android-cert-sha256.txt
       - name: Upload signed Android release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: notide-android
           if-no-files-found: error
@@ -230,13 +230,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: notide-*
           path: release-assets

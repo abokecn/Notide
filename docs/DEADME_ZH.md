@@ -6,7 +6,7 @@ Notide 是一款面向浏览器、Windows 和 Android 的轻量 Vue 3 Markdown �
 
 ## 本地运行
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 24 或更高版本。GitHub Actions 同样使用基于 Node 24 的官方 Action 版本。
 
 ```bash
 npm ci
