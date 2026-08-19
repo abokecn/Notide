@@ -24,6 +24,8 @@
     "native:android:signing": "node tools/configure-android-release.mjs",
     "release:check-version": "node tools/verify-release-version.mjs",
     "release:manifest": "node tools/create-update-manifest.mjs",
+    "signing:generate": "pwsh -NoProfile -ExecutionPolicy Bypass -File tools/generate-signing-material.ps1",
+    "signing:copy": "pwsh -NoProfile -ExecutionPolicy Bypass -File tools/copy-signing-secret.ps1",
     "r2:migrate": "powershell -ExecutionPolicy Bypass -File tools/migrate-r2-notes.ps1"
   },
   "dependencies": {

@@ -232,31 +232,36 @@ Android 需要 SDK/NDK 与 Rust Android target；Windows 需要 WebView2 和 Rus
 
 请先在仓库之外生成并离线备份签名材料，再前往 **仓库 Settings > Secrets and variables > Actions > New repository secret** 逐项添加。不要使用构建变量，也不要提交编码后的密钥；base64 只是传输编码，不是加密。
 
-1. **Windows：**从可信 CA 获取 Authenticode 代码签名证书，并把私钥导出为带密码的 `.pfx`。自签名证书不适合公开发布，也不能建立终端用户所需的信任。将 PFX 字节转换为 base64 后填入 `WINDOWS_PFX_BASE64`，导出密码填入 `WINDOWS_PFX_PASSWORD`：
+1. **Windows：**获取公开可信的 Authenticode 代码签名身份。自签名证书只能用于本地测试，不适合公开发布。当前工作流接受可导出、带密码的 `.pfx`；购买前必须向 CA 或签名服务确认能否按这种方式交付。现在的新代码签名证书通常保存在硬件或云 HSM 中，无法导出为 PFX；这类服务需要单独接入 GitHub Actions，不能填写 `WINDOWS_PFX_BASE64`。
+
+   如果已经取得可导出的 CA 签发 PFX，请将其字节转换为 base64 填入 `WINDOWS_PFX_BASE64`，导出密码填入 `WINDOWS_PFX_PASSWORD`：
 
    ```powershell
    $pfx = (Resolve-Path 'C:\secure\Notide-code-signing.pfx').Path
    [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx)) | Set-Clipboard
    ```
 
-2. **Tauri 更新器：**生成一组长期使用的 updater 密钥。命令会提示输入密码，并创建 `notide.key` 与 `notide.key.pub`。私钥文件完整内容填入 `TAURI_SIGNING_PRIVATE_KEY`，密码填入 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，公钥文件完整内容填入 `TAURI_UPDATER_PUBLIC_KEY`。请逐条执行 `Set-Clipboard`，每次先粘贴到 GitHub 再复制下一项：
+2. **Tauri 更新器与 Android：**Windows 下可以一次生成其余七项 Secret。工具使用密码学安全随机密码，创建加密的 Tauri updater 密钥和标准 PKCS#12 Android release keystore，把输出目录限制为当前 Windows 账号与 SYSTEM，并用 Windows DPAPI 保护保存的密码；已有签名目录不会被覆盖。
 
    ```powershell
-   New-Item -ItemType Directory -Force "$env:USERPROFILE\.notide-signing" | Out-Null
-   npx tauri signer generate -w "$env:USERPROFILE\.notide-signing\notide.key"
-   Get-Content -Raw "$env:USERPROFILE\.notide-signing\notide.key" | Set-Clipboard
-   Get-Content -Raw "$env:USERPROFILE\.notide-signing\notide.key.pub" | Set-Clipboard
+   npm run signing:generate
    ```
 
-3. **Android：**安装 JDK 17 或更高版本后，创建唯一且长期不变的正式 keystore。离线记录 alias 和密码，再把 keystore 字节转换为 base64 填入 `ANDROID_KEY_BASE64`，其余三个 Android Secrets 填入实际的库密码、alias 和密钥密码。若 PKCS12 只使用同一个密码，请让两个密码 Secret 使用该实际值：
+   默认输出目录是 `%USERPROFILE%\Documents\Notide Signing Keys`，位于仓库之外。工具需要 OpenSSL；如果安装在其他位置，请直接执行脚本并传入 `-OpenSslPath`。
+
+   下面的命令不会打印 Secret，只会把指定值放入剪贴板。每执行一条，就在 GitHub 创建同名仓库 Secret 并粘贴，然后再执行下一条：
 
    ```powershell
-   keytool -genkeypair -v -keystore 'C:\secure\notide-release.jks' -storetype PKCS12 -alias notide -keyalg RSA -keysize 4096 -validity 10000
-   $keystore = (Resolve-Path 'C:\secure\notide-release.jks').Path
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes($keystore)) | Set-Clipboard
+   npm run signing:copy -- TAURI_SIGNING_PRIVATE_KEY
+   npm run signing:copy -- TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+   npm run signing:copy -- TAURI_UPDATER_PUBLIC_KEY
+   npm run signing:copy -- ANDROID_KEY_BASE64
+   npm run signing:copy -- ANDROID_KEYSTORE_PASSWORD
+   npm run signing:copy -- ANDROID_KEY_ALIAS
+   npm run signing:copy -- ANDROID_KEY_PASSWORD
    ```
 
-请离线备份 PFX、updater 私钥、Android keystore、alias 和全部密码。GitHub 保存 Secret 后不允许再次读取其值；丢失或更换 Android/updater 密钥后，已有安装将无法接受后续更新。
+请对 Windows 签名身份和完整的 `Notide Signing Keys` 目录做加密离线备份。DPAPI 密码只能由创建它们的 Windows 账号解密，因此仅复制该目录不能作为可移植的密码备份。GitHub 保存 Secret 后不允许再次读取其值；丢失或更换 Android/updater 密钥后，已有安装将无法接受后续更新。
 
 任一值缺失都会使发布失败，不会降级为无签名或 debug 包。发布工作流生成 `notide-windows` 与 `notide-android` artifacts，并向 GitHub Release 附加签名 EXE/MSI、带签名的 Tauri v2 NSIS 更新器（`.exe` 与 `.exe.sig`）、签名 arm64 APK/AAB，以及 `latest.json`。
 

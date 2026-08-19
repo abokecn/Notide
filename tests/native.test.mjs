@@ -121,6 +121,31 @@ test('tag workflow fails closed and publishes only verified signed artifacts', (
   assert.doesNotMatch(source, /--debug/)
 })
 
+test('Windows signing helpers generate and copy seven secrets without printing values', () => {
+  const project = JSON.parse(read('package.json'))
+  const generate = read('tools/generate-signing-material.ps1')
+  const copy = read('tools/copy-signing-secret.ps1')
+  const names = [
+    'TAURI_SIGNING_PRIVATE_KEY',
+    'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+    'TAURI_UPDATER_PUBLIC_KEY',
+    'ANDROID_KEY_BASE64',
+    'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_ALIAS',
+    'ANDROID_KEY_PASSWORD',
+  ]
+
+  assert.match(project.scripts['signing:generate'], /generate-signing-material\.ps1/)
+  assert.match(project.scripts['signing:copy'], /copy-signing-secret\.ps1/)
+  assert.match(generate, /Refusing to overwrite the existing signing directory/)
+  assert.match(generate, /Windows DPAPI current user/)
+  assert.match(generate, /icacls\.exe/)
+  assert.match(generate, /pkcs12 -export/)
+  assert.match(copy, /Set-Clipboard -Value \$value/)
+  assert.doesNotMatch(copy, /Write-(?:Host|Output)[^\n]*\$value/)
+  for (const name of names) assert.match(copy, new RegExp(name))
+})
+
 test('Android project preparation is idempotent and release signing targets only release builds', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'notide-android-project-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

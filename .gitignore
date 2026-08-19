@@ -22,3 +22,7 @@ release-assets/
 *.p12
 *.pfx
 *.pem
+*.key
+*.key.pub
+notide-secrets.dpapi.json
+android-certificate-sha256.txt
