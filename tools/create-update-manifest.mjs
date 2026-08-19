@@ -59,7 +59,7 @@ export function createUpdateManifest({
   version,
   tag = `v${version}`,
   assetsDirectory,
-  baseUrl = `https://github.com/abokecn/Notide/releases/download/${tag}`,
+  baseUrl = `https://github.com/kingshot101/Notide/releases/download/${tag}`,
   notes = '',
   publishedAt = new Date().toISOString(),
   androidVersionCode,

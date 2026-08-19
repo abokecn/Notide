@@ -1,3 +1,5 @@
+import { ensureDatabaseSchema } from './schema.js'
+
 const API_VERSION = 2
 const NOTE_MAX_BYTES = 1024 * 1024
 const REQUEST_MAX_BYTES = 2 * 1024 * 1024
@@ -77,6 +79,7 @@ function applyCors(response, request, env) {
 function configured(env) {
   return Boolean(
     env?.DB?.prepare
+    && env?.DB?.exec
     && env?.NOTES_BUCKET?.get
     && env?.NOTES_BUCKET?.put
     && String(env?.SUPER_ADMIN_USERNAME || '').trim()
@@ -1125,7 +1128,6 @@ async function routeAuthenticated(request, auth, env, ctx) {
     throw new HttpError(405, 'method_not_allowed')
   }
 
-  if (path === '/') return json({ ok: true, service: 'notide-sync', version: API_VERSION })
   throw new HttpError(404, 'not_found')
 }
 
@@ -1137,7 +1139,12 @@ export default {
     if (!configured(env)) return finish(json({ error: 'service_not_configured' }, 503))
 
     try {
+      await ensureDatabaseSchema(env.DB)
       const url = new URL(request.url)
+      if (url.pathname === '/') {
+        if (request.method === 'GET') return finish(json({ ok: true, service: 'notide-sync', version: API_VERSION }))
+        throw new HttpError(405, 'method_not_allowed')
+      }
       if (url.pathname === '/api/auth/login') {
         if (request.method !== 'POST') throw new HttpError(405, 'method_not_allowed')
         return finish(await handleLogin(request, env))

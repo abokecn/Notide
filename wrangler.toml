@@ -2,15 +2,13 @@ name = "notide-sync"
 main = "workers/index.js"
 compatibility_date = "2026-08-17"
 
-# Create the D1 database before deployment and replace the placeholder ID below.
-# Configure SUPER_ADMIN_USERNAME, SUPER_ADMIN_PASSWORD, and AUTH_PEPPER as
-# encrypted Worker secrets. The Worker fails closed when any value is missing.
+# Wrangler 4.120+ provisions or reuses these named resources during deployment.
+# Account-specific resource IDs stay in Cloudflare and never need to be committed.
 [[d1_databases]]
 binding = "DB"
 database_name = "notide"
-database_id = "REPLACE_WITH_NOTIDE_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "NOTES_BUCKET"
-  bucket_name = "notide-notes"
+bucket_name = "notide-notes"

@@ -24,23 +24,18 @@ Notide v0.4 uses two Cloudflare storage services:
 - D1 stores users, hashed sessions, note indexes, collection versions, audit records, and rate limits.
 - R2 stores versioned note JSON. `NOTES_BUCKET` must point to the `notide-notes` bucket.
 
-The Worker fails closed when D1, R2, database migrations, or any required bootstrap secret is missing. There is no public interval during setup.
+The Worker fails closed when D1, R2, or any required bootstrap secret is missing. Wrangler provisions the named D1 and R2 resources on the first deployment, and the Worker initializes its idempotent D1 schema on the first configured request. There is no public interval during setup.
 
 ### Deploy from the Cloudflare Dashboard with GitHub
 
-#### 1. Create D1 and R2
+#### 1. Let Wrangler provision D1 and R2
 
-1. In [dash.cloudflare.com](https://dash.cloudflare.com), open **Storage & databases** > **D1 SQL database**, create a database named `notide`, and copy its database ID.
-2. Open **R2 Object Storage**, create a bucket named `notide-notes`.
-3. In `wrangler.toml`, replace `REPLACE_WITH_NOTIDE_D1_DATABASE_ID` with the D1 database ID, then commit and push that change to `main`. A D1 ID is a resource identifier, not an account credential.
-
-The committed Wrangler configuration is expected to contain both bindings:
+You do not need to create D1 or R2 manually, copy a database ID, or change `wrangler.toml`. The repository commits only stable resource names:
 
 ```toml
 [[d1_databases]]
 binding = "DB"
 database_name = "notide"
-database_id = "YOUR_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
@@ -48,7 +43,9 @@ binding = "NOTES_BUCKET"
 bucket_name = "notide-notes"
 ```
 
-Do not replace these with Dashboard-only bindings. A later Git deployment reads `wrangler.toml` again.
+On the first deployment, Wrangler finds resources with these names or creates them in your Cloudflare account and connects the bindings. Account-specific IDs remain in Cloudflare and are not written back to GitHub. The first configured API request creates the D1 tables and indexes with `CREATE ... IF NOT EXISTS`, so a separate initial migration command is not required.
+
+Cloudflare currently labels automatic resource provisioning as Beta. The resources are real, remain in your account, and follow normal D1/R2 billing and limits. Enable R2 for the account if Cloudflare asks you to accept its terms. Do not rename `notide` or `notide-notes` after storing data: a new name can provision a new empty resource and does not migrate existing data.
 
 #### 2. Connect the repository
 
@@ -56,13 +53,13 @@ In **Workers & Pages**, choose **Create** > **Import a repository**, authorize G
 
 | Field | Value |
 | --- | --- |
-| Repository | `abokecn/Notide` |
+| Repository | `kingshot101/Notide` |
 | Production branch | `main` |
 | Root directory | `/` (repository root) |
-| Build command | `npm ci && npm run test:unit && npx wrangler d1 migrations apply notide --remote` |
+| Build command | `npm ci && npm run test:unit` |
 | Deploy command | `npm run deploy:worker` |
 
-`wrangler` is pinned to `4.32.0` in `package-lock.json`. Both commands therefore use the repository version rather than an unpinned global installation. The D1 migration command is safe to keep in the build: Wrangler records applied migrations and only applies pending files.
+`wrangler` is pinned to `4.120.0` in `package-lock.json`, so Git deployments use the tested repository version. `migrations/0001_notide_v2.sql` remains available as the canonical manual migration and recovery entry point, while the Worker keeps its matching bootstrap schema under test for zero-touch first deployment.
 
 If Workers Builds offers watch paths, include `workers/**`, `migrations/**`, `wrangler.toml`, `package.json`, and `package-lock.json`.
 
@@ -97,7 +94,7 @@ Then open Notide Settings, enter the Worker base URL, sign in with the super-adm
 Common setup errors are:
 
 - `service_not_configured`: a binding or one of the three runtime secrets is missing.
-- `database_unavailable`: `migrations/0001_notide_v2.sql` was not applied to the bound D1 database.
+- `database_unavailable`: the bound D1 database could not be reached or its automatic schema initialization failed.
 - `storage_unavailable`: D1 or the `NOTES_BUCKET` R2 binding cannot be used.
 - `401 unauthorized`: the client has no valid v0.4 login session.
 
@@ -121,28 +118,19 @@ A Dashboard-only ordinary variable does not modify GitHub and may be replaced by
 
 ### Deploy with Wrangler instead
 
-For a local deployment, authenticate Wrangler and create the resources once:
+For a local deployment, authenticate Wrangler and deploy. The same automatic provisioning flow creates or reuses the named resources:
 
 ```bash
 npm ci
 npx wrangler login
 npx wrangler whoami
-npx wrangler d1 create notide
-npx wrangler r2 bucket create notide-notes
-```
-
-Copy the D1 ID printed by Wrangler into `wrangler.toml`, then apply the schema and deploy:
-
-```bash
-npx wrangler d1 migrations apply notide --remote
 npm run deploy:worker
 npx wrangler secret put SUPER_ADMIN_USERNAME
 npx wrangler secret put SUPER_ADMIN_PASSWORD
 npx wrangler secret put AUTH_PEPPER
-npm run deploy:worker
 ```
 
-Enter each value only at Wrangler's prompt. Keep the binding names `DB` and `NOTES_BUCKET` unless the Worker source is changed to match.
+Enter each value only at Wrangler's prompt. The first request after the secrets are available initializes the D1 schema. Applying `npx wrangler d1 migrations apply notide --remote` remains an optional, idempotent recovery step; it is not required for the first deployment. Keep the binding names `DB` and `NOTES_BUCKET` unless the Worker source is changed to match.
 
 ### Connect Notide
 
@@ -251,7 +239,7 @@ The native update service and signed manifest contract are implemented in `src/u
 The canonical manifest URL is:
 
 ```text
-https://github.com/abokecn/Notide/releases/latest/download/latest.json
+https://github.com/kingshot101/Notide/releases/latest/download/latest.json
 ```
 
 The native client checks at startup at most once every 24 hours, and Settings provides a forced manual check. When an update is available, Notide shows it in Settings and the editor top bar; Windows installs through the Tauri updater, while Android verifies the APK and opens the system installer. Debug APKs are deliberately excluded from Releases so they can never be selected as updates.

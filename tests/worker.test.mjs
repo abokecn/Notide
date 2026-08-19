@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import worker from '../workers/index.js'
+import { NOTIDE_SCHEMA_SQL } from '../workers/schema.js'
 
 const migration = fs.readFileSync(new URL('../migrations/0001_notide_v2.sql', import.meta.url), 'utf8')
 
@@ -34,6 +35,11 @@ class MemoryD1 {
   }
 
   prepare(sql) { return new D1Statement(this, sql) }
+
+  exec(sql) {
+    this.sqlite.exec(sql)
+    return { count: 1, duration: 0 }
+  }
 
   runStatement(statement) {
     const result = this.sqlite.prepare(statement.sql).run(...statement.values)
@@ -149,15 +155,36 @@ test('Worker fails closed without D1 or all three super-admin secrets', async ()
   assert.match(preflight.headers.get('access-control-allow-headers'), /if-none-match/)
   assert.equal(preflight.headers.get('cache-control'), 'no-store')
 
-  const missingMigration = createEnv({ DB: new MemoryD1(false) })
-  const migrationResponse = await worker.fetch(request('/api/auth/login', {
+  const unavailableDatabase = createEnv({
+    DB: {
+      prepare() { throw new Error('D1_ERROR: unavailable') },
+      exec() { throw new Error('D1_ERROR: unavailable') },
+    },
+  })
+  const unavailableResponse = await worker.fetch(request('/api/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username: 'root', password: missingMigration.SUPER_ADMIN_PASSWORD }),
-  }), missingMigration)
-  assert.equal(migrationResponse.status, 503)
-  assert.equal((await migrationResponse.json()).error, 'database_unavailable')
-  missingMigration.DB.close()
+    body: JSON.stringify({ username: 'root', password: unavailableDatabase.SUPER_ADMIN_PASSWORD }),
+  }), unavailableDatabase)
+  assert.equal(unavailableResponse.status, 503)
+  assert.equal((await unavailableResponse.json()).error, 'database_unavailable')
+})
+
+test('Worker initializes an automatically provisioned empty D1 database', async (context) => {
+  const env = createEnv({ DB: new MemoryD1(false) })
+  context.after(() => env.DB.close())
+
+  const root = await worker.fetch(request('/'), env)
+  assert.equal(root.status, 200)
+  assert.deepEqual(await root.json(), { ok: true, service: 'notide-sync', version: 2 })
+  assert.equal(env.DB.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").length, 1)
+
+  const session = await login(env)
+  assert.equal(session.user.role, 'super_admin')
+})
+
+test('Worker bootstrap schema stays identical to the checked-in D1 migration', () => {
+  assert.equal(NOTIDE_SCHEMA_SQL.trim(), migration.trim())
 })
 
 test('CORS defaults to public access and can be restricted to exact origins', async (context) => {

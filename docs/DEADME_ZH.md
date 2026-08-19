@@ -24,23 +24,18 @@ Notide v0.4 使用两种 Cloudflare 存储服务：
 - D1 保存用户、哈希后的会话、笔记索引、集合版本、审计记录和限流状态。
 - R2 保存带版本的笔记 JSON；`NOTES_BUCKET` 必须绑定 `notide-notes` 存储桶。
 
-缺少 D1、R2、数据库迁移或任一启动 Secret 时，Worker 会默认拒绝服务，不会在部署过程中出现暂时公开的 API。
+缺少 D1、R2 或任一启动 Secret 时，Worker 会默认拒绝服务。Wrangler 会在首次部署时预配具名的 D1/R2，Worker 则在第一次已配置请求中幂等初始化 D1 表结构，不会在部署过程中出现暂时公开的 API。
 
 ### 通过 Cloudflare Dashboard 连接 GitHub 部署
 
-#### 1. 创建 D1 与 R2
+#### 1. 由 Wrangler 自动预配 D1 与 R2
 
-1. 在 [dash.cloudflare.com](https://dash.cloudflare.com) 打开 **Storage & databases** > **D1 SQL database**，创建名为 `notide` 的数据库，并复制数据库 ID。
-2. 打开 **R2 Object Storage**，创建名为 `notide-notes` 的存储桶。
-3. 在 `wrangler.toml` 中把 `REPLACE_WITH_NOTIDE_D1_DATABASE_ID` 替换为 D1 数据库 ID，然后提交并推送到 `main`。D1 ID 是资源标识，不是账号凭据。
-
-提交后的 Wrangler 配置应同时包含以下绑定：
+你不再需要手工创建 D1/R2、复制数据库 ID 或修改 `wrangler.toml`。仓库只提交稳定的资源名称：
 
 ```toml
 [[d1_databases]]
 binding = "DB"
 database_name = "notide"
-database_id = "你的_D1_数据库_ID"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
@@ -48,7 +43,9 @@ binding = "NOTES_BUCKET"
 bucket_name = "notide-notes"
 ```
 
-不要改成只存在于 Dashboard 的手工绑定；后续 Git 部署还会重新读取 `wrangler.toml`。
+首次部署时，Wrangler 会在你的 Cloudflare 账号中查找同名资源；不存在时自动创建，并完成绑定。账号专属 ID 只保留在 Cloudflare，不会回写 GitHub。第一次已配置的 API 请求会通过 `CREATE ... IF NOT EXISTS` 创建 D1 表与索引，因此不再需要首次部署前单独执行迁移命令。
+
+Cloudflare 目前仍将自动资源预配标为 Beta。创建出的 D1/R2 是真实资源，遵循正常计费和配额；如果 Cloudflare 提示启用 R2 或接受条款，需要先完成该账号步骤。已有数据后不要重命名 `notide` 或 `notide-notes`，新名称可能预配一套新的空资源，并不会自动迁移旧数据。
 
 #### 2. 连接 GitHub 仓库
 
@@ -56,13 +53,13 @@ bucket_name = "notide-notes"
 
 | 字段 | 值 |
 | --- | --- |
-| 仓库 | `abokecn/Notide` |
+| 仓库 | `kingshot101/Notide` |
 | 生产分支 | `main` |
 | 根目录 | `/`（仓库根目录） |
-| 构建命令 | `npm ci && npm run test:unit && npx wrangler d1 migrations apply notide --remote` |
+| 构建命令 | `npm ci && npm run test:unit` |
 | 部署命令 | `npm run deploy:worker` |
 
-`wrangler` 已在 `package-lock.json` 固定为 `4.32.0`，这两条命令使用仓库中的版本，不依赖未锁定的全局安装。D1 迁移命令可以长期保留在构建步骤中：Wrangler 会记录已执行的迁移，只应用尚未执行的文件。
+`wrangler` 已在 `package-lock.json` 固定为 `4.120.0`，Git 部署使用经过测试的仓库版本。`migrations/0001_notide_v2.sql` 仍作为规范的手工迁移与恢复入口保留；Worker 中与它一致的启动 schema 也由测试约束，用于实现首次零配置部署。
 
 如果 Workers Builds 提供 watch paths，可加入 `workers/**`、`migrations/**`、`wrangler.toml`、`package.json` 和 `package-lock.json`。
 
@@ -97,7 +94,7 @@ curl https://notide-sync.<你的子域>.workers.dev/
 常见配置错误：
 
 - `service_not_configured`：缺少绑定或三个运行时 Secret 中的任一项。
-- `database_unavailable`：尚未对绑定的 D1 执行 `migrations/0001_notide_v2.sql`。
+- `database_unavailable`：绑定的 D1 无法访问，或自动初始化表结构失败。
 - `storage_unavailable`：D1 或 `NOTES_BUCKET` R2 绑定不可用。
 - `401 unauthorized`：客户端没有有效的 v0.4 登录会话。
 
@@ -121,28 +118,19 @@ Git 是 Worker 代码和普通 Wrangler 配置的唯一来源。下一次 Git �
 
 ### 改用 Wrangler 部署
 
-在本地部署时，先登录 Wrangler 并创建一次资源：
+在本地部署时，登录 Wrangler 后直接部署即可；同一套自动预配流程会创建或复用具名资源：
 
 ```bash
 npm ci
 npx wrangler login
 npx wrangler whoami
-npx wrangler d1 create notide
-npx wrangler r2 bucket create notide-notes
-```
-
-把 Wrangler 输出的 D1 ID 写入 `wrangler.toml`，然后执行数据库迁移和部署：
-
-```bash
-npx wrangler d1 migrations apply notide --remote
 npm run deploy:worker
 npx wrangler secret put SUPER_ADMIN_USERNAME
 npx wrangler secret put SUPER_ADMIN_PASSWORD
 npx wrangler secret put AUTH_PEPPER
-npm run deploy:worker
 ```
 
-只在 Wrangler 的交互提示中输入 Secret。除非同步修改 Worker 源码，否则请保留 `DB` 和 `NOTES_BUCKET` 绑定名。
+只在 Wrangler 的交互提示中输入 Secret。Secret 生效后的第一次请求会初始化 D1 schema。`npx wrangler d1 migrations apply notide --remote` 仍可作为可选且幂等的恢复步骤，但首次部署不再需要它。除非同步修改 Worker 源码，否则请保留 `DB` 和 `NOTES_BUCKET` 绑定名。
 
 ### 连接 Notide
 
@@ -251,7 +239,7 @@ Android 需要 SDK/NDK 与 Rust Android target；Windows 需要 WebView2 和 Rus
 固定清单地址为：
 
 ```text
-https://github.com/abokecn/Notide/releases/latest/download/latest.json
+https://github.com/kingshot101/Notide/releases/latest/download/latest.json
 ```
 
 原生客户端会在启动时检查更新，但 24 小时内最多自动检查一次；设置中也提供不受该间隔限制的手动检查。发现新版本后，Notide 会在设置和编辑器顶部显示提示；Windows 通过 Tauri updater 安装，Android 校验 APK 后打开系统安装器。debug APK 不会进入 Release，因此不会被更新流程选中。

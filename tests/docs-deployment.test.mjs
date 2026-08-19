@@ -5,7 +5,7 @@ import fs from 'node:fs'
 const root = new URL('..', import.meta.url)
 const read = (path) => fs.readFileSync(new URL(path, root), 'utf8')
 
-test('Cloudflare deployment docs describe the v0.4 D1 and account contract in both languages', () => {
+test('Cloudflare deployment docs describe automatic provisioning and the v0.4 account contract', () => {
   const english = read('README.md')
   const chinese = read('docs/DEADME_ZH.md')
   const required = [
@@ -16,7 +16,7 @@ test('Cloudflare deployment docs describe the v0.4 D1 and account contract in bo
     'migrations/0001_notide_v2.sql',
     'npm run deploy:worker',
     'npx wrangler d1 migrations apply notide --remote',
-    'abokecn/Notide',
+    'kingshot101/Notide',
     'Access-Control-Allow-Origin: *',
     'ALLOWED_ORIGINS',
   ]
@@ -26,7 +26,22 @@ test('Cloudflare deployment docs describe the v0.4 D1 and account contract in bo
     assert.doesNotMatch(document, /wrangler secret put SYNC_TOKEN/)
     assert.match(document, /SYNC_TOKEN[\s\S]*(?:does not become|不会自动变成)/)
     assert.match(document, /ALLOWED_ORIGINS[\s\S]*(?:does not modify GitHub|不会修改 GitHub)/)
+    assert.match(document, /(?:automatic resource provisioning|自动资源预配)/i)
+    assert.match(document, /4\.120\.0/)
+    assert.match(document, /CREATE \.\.\. IF NOT EXISTS/)
+    assert.doesNotMatch(document, /REPLACE_WITH_NOTIDE_D1_DATABASE_ID|database_id\s*=/)
+    assert.doesNotMatch(document, /wrangler d1 create notide|wrangler r2 bucket create notide-notes/)
   }
+})
+
+test('Wrangler uses name-only bindings that can be provisioned without repository IDs', () => {
+  const config = read('wrangler.toml')
+  const project = JSON.parse(read('package.json'))
+
+  assert.equal(project.devDependencies.wrangler, '4.120.0')
+  assert.match(config, /binding = "DB"[\s\S]*database_name = "notide"/)
+  assert.match(config, /binding = "NOTES_BUCKET"[\s\S]*bucket_name = "notide-notes"/)
+  assert.doesNotMatch(config, /database_id|REPLACE_WITH/)
 })
 
 test('environment example exposes only the non-secret Worker endpoint', () => {
@@ -65,7 +80,7 @@ test('release docs require every production signing secret and exclude debug rel
 
   for (const document of [english, chinese]) {
     for (const secret of secrets) assert.match(document, new RegExp(secret))
-    assert.match(document, /https:\/\/github\.com\/abokecn\/Notide\/releases\/latest\/download\/latest\.json/)
+    assert.match(document, /https:\/\/github\.com\/kingshot101\/Notide\/releases\/latest\/download\/latest\.json/)
     assert.match(document, /debug[\s\S]*(?:never attached|绝不会附加)/i)
     assert.match(document, /\.exe\.sig/)
     assert.doesNotMatch(document, /NSIS updater archive/)

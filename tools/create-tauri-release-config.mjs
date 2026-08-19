@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export const DEFAULT_UPDATER_ENDPOINT = 'https://github.com/abokecn/Notide/releases/latest/download/latest.json'
+export const DEFAULT_UPDATER_ENDPOINT = 'https://github.com/kingshot101/Notide/releases/latest/download/latest.json'
 
 export function createTauriReleaseConfig(environment = process.env) {
   const required = ['WINDOWS_CERT_THUMBPRINT', 'TAURI_UPDATER_PUBLIC_KEY']

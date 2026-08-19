@@ -1,6 +1,6 @@
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 export const UPDATE_RETRY_INTERVAL_MS = 15 * 60 * 1000
-export const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/abokecn/Notide/releases/latest/download/latest.json'
+export const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/kingshot101/Notide/releases/latest/download/latest.json'
 export const UPDATE_CHECK_STORAGE_KEY = 'notide-update-last-check-v1'
 export const MAX_ANDROID_APK_BYTES = 30 * 1024 * 1024
 

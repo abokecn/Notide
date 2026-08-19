@@ -24,7 +24,7 @@ function manifest(version = '0.4.1') {
         architecture: 'arm64-v8a',
         versionCode: 40001,
         apk: {
-          url: 'https://github.com/abokecn/Notide/releases/download/v0.4.1/Notide.apk',
+          url: 'https://github.com/kingshot101/Notide/releases/download/v0.4.1/Notide.apk',
           sha256: apkSha256,
           size: apk.byteLength,
         },
